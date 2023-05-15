@@ -3,15 +3,15 @@ import os, sys, re
 from pathlib import Path
 from subprocess import check_output
 
-USAGE = """Usage:  petal <cmd> [args ...]\n
+USAGE = """Usage: petal <command> [args ...]\n
     Create / build / re-build an environment
         petal make [env] [with /usr/bin/python3] [over layer ...]
 
     Install package(s)
-        petal add  [pip install params ...] [to env]
+        petal add [pip install params ...] [to env]
 
     Remove package(s)
-        petal del  [pip uninstall params ...] [from env]
+        petal del [pip uninstall params ...] [from env]
 """
 
 class Petal:
@@ -21,6 +21,7 @@ class Petal:
         self.python = '/usr/bin/python3.8'
         # TODO: configurable pip URL
         self.pypi = 'https://pypi.tuna.tsinghua.edu.cn'
+
 
     def run(self):
         args = sys.argv[1:]
@@ -36,35 +37,71 @@ class Petal:
     def cmd_make(self, args):
         env_dir = args[0] if args else 'env'
         if not os.path.exists(env_dir):
-            self.env_new(env_dir, args[1:])
+            if len(args) > 2:
+                if args[1] != 'over' or len(args) < 3:
+                    die(USAGE)
+                layers = args[2:]
+            else:
+                layers = []
+            self.env_new(env_dir, layers)
         else:
             if len(args) > 1:
                 die(USAGE)
             self.env_build(env_dir)
 
 
-    def env_new(self, path, args):
+    def ensure_core(self):
+        env = f'~/.cache/petal.py/core/python{self.py_version}'
+        if Path(env).expanduser().exists():
+            return env
+
+        try:
+            self.env_new(env, is_core=True)
+        except:
+            import shutil
+            shutil.rmtree(env, ignore_errors=True)
+            env = None
+        if env is None:
+            die(f'failed to make core env {env}')
+
+        return env
+
+
+    def env_new(self, path, layers=None, *, is_core=False):
         if not os.path.exists(self.python):
             self.die(f'{self.python} not found')
-        env = Path(path)
-        make_dir(env / self.user_site())
+        if not is_core:
+            core = self.ensure_core()
+            if not layers:
+                layers = [core]
+        env = Path(path).expanduser()
+        make_dir(env / self.user_site)
         make_dir(env / 'bin')
         os.symlink(self.python, env / 'bin' / 'python')
         with open(env / 'pyvenv.cfg', 'w+') as cfg:
             cfg.write(f'home = {os.path.dirname(self.python)}\n')
-            cfg.write(f'version = {self.py_version()}\n')
-        self.bootstrap_pip(os.path.realpath(env))
+            cfg.write(f'include-system-site-packages = false\n')
+            cfg.write(f'version = {self.py_version}\n')
+            if not is_core and layers:
+                cfg.write(f'above = {", ".join(layers)}\n')
+        if is_core:
+            self.bootstrap_pip(os.path.realpath(env))
+        elif layers:
+            self.install_layers_hack(env)
+        log(f'env ready: {path}')
 
 
     def env_build(self, path):
         print('build', path)
 
 
+    @property
     def user_site(self):
         return re.sub(r'^.+/(lib.+/site-packages)$', r'\1',
                       check_output(f'{self.python} -m site --user-site'))
 
 
+    @property
     def py_version(self):
         return check_output([self.python, '-c',
             'import sys; v = sys.version_info; print(f"{v[0]}.{v[1]}")'])
@@ -79,20 +116,59 @@ class Petal:
         fname = os.path.basename(pip_url)
         pip_ver = fname.split('-')[1]
         with tempfile.TemporaryDirectory(suffix=".petal") as tmp:
-            print(f'download pip {pip_ver} from {self.pypi}')
+            log(f'download pip {pip_ver} from {self.pypi}')
             py = f'{env}/bin/python'
             whl = f'{tmp}/{fname}'
             download_url(pip_url, whl)
             cmd = f'{py} {whl}/pip install --no-index -q {whl}'
             os.system(cmd)
-            print(f'pip bootstrap done')
+            log(f'pip bootstrap done for {env}')
 
-################################################################################
-# helpers
-################################################################################
+
+    def install_layers_hack(self, env):
+        site = env / 'lib' / f'python{self.py_version}' / 'site-packages'
+        write_file(site / 'petal-layers.pth',
+                   "import sys; __import__('_petal_layers').scan_layers()")
+        write_file(site / '_petal_layers.py', """
+import sys; from pathlib import Path; envs = set()
+class EnvLayer:
+    def __init__(self, root, name):
+        # prevent loops
+        if str(root) in envs:
+            self.root = None
+        else:
+            self.root, self.name = root, name
+            envs.add(str(self.root))
+    def add_path(self):
+        if not self.root:
+            return
+        site_path = self.root / 'lib' / self.name / 'site-packages'
+        if site_path.is_dir():
+            path = str(site_path)
+            if path not in sys.path:
+                sys.path.append(path)
+        try:
+            with open(self.root / 'pyvenv.cfg') as cfg:
+                for line in cfg.readlines():
+                    line = line.strip()
+                    if line.startswith('#') or not line.startswith('above'): continue
+                    spec = line.split('=')[1].strip()
+                    for l in [x.strip() for x in spec.split(',')]:
+                        l = (Path(l) if l[0] in ['/', '~'] else self.root.parent / l).expanduser()
+                        if l.is_dir():
+                            EnvLayer(self.root.parent / l, self.name).add_path()
+        except:
+            pass
+def scan_layers():
+    py_dir = Path(__file__).parent.parent
+    EnvLayer(py_dir.parent.parent, py_dir.name).add_path(); envs = set()
+""")
+
+
 def die(msg):
     sys.stderr.write(msg + '\n')
     sys.exit(1)
+
 
 def make_dir(path):
     try:
@@ -100,11 +176,13 @@ def make_dir(path):
     except Exception as e:
         die(f'failed to make env dierctory: {str(e)}')
 
+
 def check_output(cmd):
     import subprocess
     if isinstance(cmd, str):
         cmd = cmd.split()
     return subprocess.check_output(cmd).decode().strip()
+
 
 def download_url(url, filename=None):
     # Get the response from the URL
@@ -117,6 +195,17 @@ def download_url(url, filename=None):
         with open(filename, 'wb') as f:
             f.write(data)
     return data
+
+
+def write_file(fname, content):
+    with open(fname, 'w+') as f:
+        f.write(content.strip())
+        f.write('\n')
+
+
+def log(msg):
+    print(msg)
+
 
 if __name__ == '__main__':
     Petal().run()
