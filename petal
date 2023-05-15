@@ -1,0 +1,124 @@
+#!/usr/bin/python3 -B
+import os, sys, re
+from pathlib import Path
+from subprocess import check_output
+
+USAGE = """Usage:  petal <cmd> [args ...]\n
+    Create / build / re-build an environment
+        petal make [env] [with /usr/bin/python3] [over layer ...]
+
+    Install package(s)
+        petal add  [pip install params ...] [to env]
+
+    Remove package(s)
+        petal del  [pip uninstall params ...] [from env]
+"""
+
+class Petal:
+    def __init__(self):
+        self.exit_code = 0
+        # TODO: configurable Python version
+        self.python = '/usr/bin/python3.8'
+        # TODO: configurable pip URL
+        self.pypi = 'https://pypi.tuna.tsinghua.edu.cn'
+
+    def run(self):
+        args = sys.argv[1:]
+        if not args:
+            die(USAGE)
+        cmd = getattr(self, f'cmd_{args[0]}', None)
+        if not cmd:
+            die(f'invalid command {args[0]}')
+        cmd(args[1:])
+        exit(self.exit_code)
+
+
+    def cmd_make(self, args):
+        env_dir = args[0] if args else 'env'
+        if not os.path.exists(env_dir):
+            self.env_new(env_dir, args[1:])
+        else:
+            if len(args) > 1:
+                die(USAGE)
+            self.env_build(env_dir)
+
+
+    def env_new(self, path, args):
+        if not os.path.exists(self.python):
+            self.die(f'{self.python} not found')
+        env = Path(path)
+        make_dir(env / self.user_site())
+        make_dir(env / 'bin')
+        os.symlink(self.python, env / 'bin' / 'python')
+        with open(env / 'pyvenv.cfg', 'w+') as cfg:
+            cfg.write(f'home = {os.path.dirname(self.python)}\n')
+            cfg.write(f'version = {self.py_version()}\n')
+        self.bootstrap_pip(os.path.realpath(env))
+
+
+    def env_build(self, path):
+        print('build', path)
+
+
+    def user_site(self):
+        return re.sub(r'^.+/(lib.+/site-packages)$', r'\1',
+                      check_output(f'{self.python} -m site --user-site'))
+
+
+    def py_version(self):
+        return check_output([self.python, '-c',
+            'import sys; v = sys.version_info; print(f"{v[0]}.{v[1]}")'])
+
+
+    def bootstrap_pip(self, env):
+        import json
+        import tempfile
+
+        data = json.loads(download_url(f'{self.pypi}/pypi/pip/json'))
+        pip_url = re.sub(r'https?://[^/]*', self.pypi, data['urls'][0]['url'])
+        fname = os.path.basename(pip_url)
+        pip_ver = fname.split('-')[1]
+        with tempfile.TemporaryDirectory(suffix=".petal") as tmp:
+            print(f'download pip {pip_ver} from {self.pypi}')
+            py = f'{env}/bin/python'
+            whl = f'{tmp}/{fname}'
+            download_url(pip_url, whl)
+            cmd = f'{py} {whl}/pip install --no-index -q {whl}'
+            os.system(cmd)
+            print(f'pip bootstrap done')
+
+################################################################################
+# helpers
+################################################################################
+def die(msg):
+    sys.stderr.write(msg + '\n')
+    sys.exit(1)
+
+def make_dir(path):
+    try:
+        os.makedirs(path)
+    except Exception as e:
+        die(f'failed to make env dierctory: {str(e)}')
+
+def check_output(cmd):
+    import subprocess
+    if isinstance(cmd, str):
+        cmd = cmd.split()
+    return subprocess.check_output(cmd).decode().strip()
+
+def download_url(url, filename=None):
+    # Get the response from the URL
+    import urllib.request
+    # TODO: add timeout
+    data = urllib.request.urlopen(url).read()
+
+    # Write the data to a local file
+    if filename:
+        with open(filename, 'wb') as f:
+            f.write(data)
+    return data
+
+if __name__ == '__main__':
+    Petal().run()
+
+### petal ends here
