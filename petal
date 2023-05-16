@@ -14,13 +14,30 @@ USAGE = """Usage: petal <command> [args ...]\n
         petal del [pip uninstall params ...] [from env]
 """
 
-class Petal:
+class ColorMaker:
+    def __init__(self):
+        self.istty = sys.stdout.isatty()
+
+    def _color(self, color=0):
+        if not self.istty:
+            return ''
+        return f'\033[{color}m' if color else '\033[0m'
+
+    def _r(self, txt): return self._color(31) + txt + self._color()
+    def _g(self, txt): return self._color(32) + txt + self._color()
+    def _y(self, txt): return self._color(33) + txt + self._color()
+    def _b(self, txt): return self._color(34) + txt + self._color()
+    def _c(self, txt): return self._color(35) + txt + self._color()
+    def _m(self, txt): return self._color(36) + txt + self._color()
+
+class Petal(ColorMaker):
     def __init__(self):
         self.exit_code = 0
         # TODO: configurable Python version
         self.python = '/usr/bin/python3.8'
         # TODO: configurable pip URL
         self.pypi = 'https://pypi.tuna.tsinghua.edu.cn'
+        self.istty = sys.stdout.isatty()
 
 
     @property
@@ -99,12 +116,14 @@ class Petal:
                 cfg.write(f'above = {", ".join(layers)}\n')
         if is_core:
             self.bootstrap_pip(os.path.realpath(env))
-            log(f'petal core for python {self.py_version} made: {path}')
+            log(f'petal core for python {self.py_version} made: ',
+                self._y(path))
         else:
-            msg = f'environment "{path}" made'
+            msg = 'environment ' + self._y(path) + ' made'
             if layers:
                 self.install_layers_hack(env)
-                msg += f' on top of [{", ".join(layers)}]'
+                msg += (' on top of [%s]' %
+                        ', '.join([self._y(layer) for layer in layers]))
             log(msg)
 
 
@@ -128,13 +147,13 @@ class Petal:
         fname = os.path.basename(pip_url)
         pip_ver = fname.split('-')[1]
         with tempfile.TemporaryDirectory(suffix=".petal") as tmp:
-            log(f'download pip {pip_ver} from {self.pypi}')
+            log('download pip ' + self._b(pip_ver) + f' from {self.pypi}')
             py = f'{env}/bin/python'
             whl = f'{tmp}/{fname}'
             download_url(pip_url, whl)
             cmd = f'{py} {whl}/pip install --no-index -q {whl}'
             os.system(cmd)
-            log(f'pip bootstrap done for {env}')
+            log('pip bootstrap done for ' + self._y(env))
 
 
     def install_layers_hack(self, env):
@@ -210,8 +229,8 @@ def write_file(fname, content):
         f.write('\n')
 
 
-def log(msg):
-    print(msg)
+def log(*msg):
+    print(''.join([str(x) for x in msg]))
 
 
 if __name__ == '__main__':
