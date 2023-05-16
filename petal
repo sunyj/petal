@@ -1,7 +1,7 @@
 #!/usr/bin/python3 -B
-import os, sys, re
+import sys, os, re
 from pathlib import Path
-from subprocess import check_output
+
 
 USAGE = """Usage: petal <command> [args ...]\n
     Create / build / re-build an environment
@@ -13,6 +13,7 @@ USAGE = """Usage: petal <command> [args ...]\n
     Remove package(s)
         petal del [pip uninstall params ...] [from env]
 """
+
 
 class ColorMaker:
     def __init__(self):
@@ -27,6 +28,7 @@ class ColorMaker:
     def _b(self, txt): return self._color(34) + txt + self._color()
     def _c(self, txt): return self._color(35) + txt + self._color()
     def _m(self, txt): return self._color(36) + txt + self._color()
+
 
 class Petal(ColorMaker):
     def __init__(self):
