@@ -112,7 +112,9 @@ class Petal(ColorMaker):
             cfg.write(f'home = {os.path.dirname(self.python)}\n')
             cfg.write(f'include-system-site-packages = false\n')
             cfg.write(f'version = {self.py_version}\n')
-            if not is_core and layers:
+            if is_core:
+                cfg.write(f'core = true\n')
+            elif layers:
                 cfg.write(f'above = {", ".join(layers)}\n')
         if is_core:
             self.bootstrap_pip(os.path.realpath(env))
@@ -161,9 +163,10 @@ class Petal(ColorMaker):
         write_file(site / 'petal-layers.pth',
                    "import sys; __import__('_petal_layers').scan_layers()")
         write_file(site / '_petal_layers.py', """
-import sys; from pathlib import Path; envs = set()
+import sys, os; from pathlib import Path; envs = set()
 class EnvLayer:
     def __init__(self, root, name):
+        self.is_core = False
         if str(root) in envs:
             self.root = None
         else:
@@ -172,23 +175,33 @@ class EnvLayer:
     def add_path(self):
         if not self.root:
             return
-        site_path = self.root / 'lib' / self.name / 'site-packages'
-        if site_path.is_dir():
-            path = str(site_path)
-            if path not in sys.path:
-                sys.path.append(path)
+        layers = []
         try:
             with open(self.root / 'pyvenv.cfg') as cfg:
                 for line in cfg.readlines():
                     line = line.strip()
-                    if line.startswith('#') or not line.startswith('above'):
+                    if line.startswith('#'):
                         continue
-                    spec = line.split('=')[1].strip()
-                    for l in [x.strip() for x in spec.split(',')]:
+                    key, val = [x.strip() for x in line.split('=')]
+                    if key == 'core' and val.lower() == 'true':
+                        self.is_core = True
+                        layers = []
+                        break
+                    if key != 'above': continue
+                    for l in [x.strip() for x in val.split(',')]:
                         layer = l[0] in ['/', '~'] and Path(l) or self.root / l
                         layer = layer.expanduser().resolve()
                         if layer.is_dir():
-                            EnvLayer(layer, self.name).add_path()
+                            layers.append(layer)
+        except: pass
+        if not self.is_core or 'PETAL_USE_CORE' in os.environ:
+            site_path = self.root / 'lib' / self.name / 'site-packages'
+            if site_path.is_dir():
+                path = str(site_path)
+                if path not in sys.path:
+                    sys.path.append(path)
+        try:
+            for layer in layers: EnvLayer(layer, self.name).add_path()
         except: pass
 def scan_layers():
     py_dir = Path(__file__).parent.parent
