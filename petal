@@ -99,9 +99,13 @@ class Petal:
                 cfg.write(f'above = {", ".join(layers)}\n')
         if is_core:
             self.bootstrap_pip(os.path.realpath(env))
-        elif layers:
-            self.install_layers_hack(env)
-        log(f'env ready: {path}')
+            log(f'petal core for python {self.py_version} made: {path}')
+        else:
+            msg = f'environment "{path}" made'
+            if layers:
+                self.install_layers_hack(env)
+                msg += f' on top of [{", ".join(layers)}]'
+            log(msg)
 
 
     def env_build(self, path):
@@ -191,15 +195,11 @@ def check_output(cmd):
     return subprocess.check_output(cmd).decode().strip()
 
 
-def download_url(url, filename=None):
-    # Get the response from the URL
+def download_url(url, filename=None, *, timeout=10):
     import urllib.request
-    # TODO: add timeout
-    data = urllib.request.urlopen(url).read()
-
-    # Write the data to a local file
+    data = urllib.request.urlopen(url, timeout=timeout).read()
     if filename:
-        with open(filename, 'wb') as f:
+        with open(filename, 'wb+') as f:
             f.write(data)
     return data
 
