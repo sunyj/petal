@@ -19,9 +19,7 @@ class ColorMaker:
         self.istty = sys.stdout.isatty()
 
     def _color(self, color=0):
-        if not self.istty:
-            return ''
-        return f'\033[{color}m' if color else '\033[0m'
+        return self.istty and (f'\033[{color}m' if color else '\033[0m') or ''
 
     def _r(self, txt): return self._color(31) + txt + self._color()
     def _g(self, txt): return self._color(32) + txt + self._color()
@@ -181,10 +179,11 @@ class EnvLayer:
             with open(self.root / 'pyvenv.cfg') as cfg:
                 for line in cfg.readlines():
                     line = line.strip()
-                    if line.startswith('#') or not line.startswith('above'): continue
+                    if line.startswith('#') or not line.startswith('above'):
+                        continue
                     spec = line.split('=')[1].strip()
                     for l in [x.strip() for x in spec.split(',')]:
-                        layer = Path(l) if l[0] in ['/', '~'] else self.root / l
+                        layer = l[0] in ['/', '~'] and Path(l) or self.root / l
                         layer = layer.expanduser().resolve()
                         if layer.is_dir():
                             EnvLayer(layer, self.name).add_path()
