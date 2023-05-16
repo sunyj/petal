@@ -23,6 +23,18 @@ class Petal:
         self.pypi = 'https://pypi.tuna.tsinghua.edu.cn'
 
 
+    @property
+    def user_site(self):
+        return re.sub(r'^.+/(lib.+/site-packages)$', r'\1',
+                      check_output(f'{self.python} -m site --user-site'))
+
+
+    @property
+    def py_version(self):
+        return check_output([self.python, '-c',
+            'import sys; v = sys.version_info; print(f"{v[0]}.{v[1]}")'])
+
+
     def run(self):
         args = sys.argv[1:]
         if not args:
@@ -70,11 +82,12 @@ class Petal:
     def env_new(self, path, layers=None, *, is_core=False):
         if not os.path.exists(self.python):
             self.die(f'{self.python} not found')
+        env = Path(path).expanduser()
         if not is_core:
             core = self.ensure_core()
             if not layers:
                 layers = [core]
-        env = Path(path).expanduser()
+            layers = [self.calc_layer_path(env, l) for l in layers]
         make_dir(env / self.user_site)
         make_dir(env / 'bin')
         os.symlink(self.python, env / 'bin' / 'python')
@@ -95,16 +108,11 @@ class Petal:
         print('build', path)
 
 
-    @property
-    def user_site(self):
-        return re.sub(r'^.+/(lib.+/site-packages)$', r'\1',
-                      check_output(f'{self.python} -m site --user-site'))
-
-
-    @property
-    def py_version(self):
-        return check_output([self.python, '-c',
-            'import sys; v = sys.version_info; print(f"{v[0]}.{v[1]}")'])
+    def calc_layer_path(self, env, layer):
+        if layer[0] in ['~', '/']:
+            return layer
+        base = Path(layer).expanduser().resolve()
+        return os.path.relpath(base, env.resolve())
 
 
     def bootstrap_pip(self, env):
@@ -133,7 +141,6 @@ class Petal:
 import sys; from pathlib import Path; envs = set()
 class EnvLayer:
     def __init__(self, root, name):
-        # prevent loops
         if str(root) in envs:
             self.root = None
         else:
@@ -154,11 +161,11 @@ class EnvLayer:
                     if line.startswith('#') or not line.startswith('above'): continue
                     spec = line.split('=')[1].strip()
                     for l in [x.strip() for x in spec.split(',')]:
-                        l = (Path(l) if l[0] in ['/', '~'] else self.root.parent / l).expanduser()
-                        if l.is_dir():
-                            EnvLayer(self.root.parent / l, self.name).add_path()
-        except:
-            pass
+                        layer = Path(l) if l[0] in ['/', '~'] else self.root / l
+                        layer = layer.expanduser().resolve()
+                        if layer.is_dir():
+                            EnvLayer(layer, self.name).add_path()
+        except: pass
 def scan_layers():
     py_dir = Path(__file__).parent.parent
     EnvLayer(py_dir.parent.parent, py_dir.name).add_path(); envs = set()
