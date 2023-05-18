@@ -1,6 +1,7 @@
 #!/usr/bin/python3 -B
 import sys, os, re, json
 from pathlib import Path
+from contextlib import contextmanager
 
 # remove dist-packages, make sure only std libraries are used
 sys.path = [p for p in sys.path if not re.search(r'/dist-packages$', p)]
@@ -34,12 +35,12 @@ class ColorMaker:
     def _color(self, color=0):
         return self.istty and (f'\033[{color}m' if color else '\033[0m') or ''
 
-    def _r(self, txt): return self._color(31) + txt + self._color()
-    def _g(self, txt): return self._color(32) + txt + self._color()
-    def _y(self, txt): return self._color(33) + txt + self._color()
-    def _b(self, txt): return self._color(34) + txt + self._color()
-    def _c(self, txt): return self._color(35) + txt + self._color()
-    def _m(self, txt): return self._color(36) + txt + self._color()
+    def _r(self, txt): return self._color(31) + str(txt) + self._color()
+    def _g(self, txt): return self._color(32) + str(txt) + self._color()
+    def _y(self, txt): return self._color(33) + str(txt) + self._color()
+    def _b(self, txt): return self._color(34) + str(txt) + self._color()
+    def _m(self, txt): return self._color(35) + str(txt) + self._color()
+    def _c(self, txt): return self._color(36) + str(txt) + self._color()
 
 
 class Petal(ColorMaker):
@@ -49,7 +50,7 @@ class Petal(ColorMaker):
         self.python = '/usr/bin/python3.8'
         # TODO: configurable pip URL
         self.pypi = 'https://pypi.tuna.tsinghua.edu.cn'
-
+        super().__init__()
 
     @property
     def user_site(self):
@@ -92,15 +93,57 @@ class Petal(ColorMaker):
 
 
     def cmd_add(self, args):
+        "Install pakcages to env"
+
         if len(args) > 2 and args[-2] == 'to':
             env = PetalEnv(args[-1])
             args = args[:-2]
         else:
             env = default_env()
 
-        # get package we want to install from command line
-        packages = env.extract_package_names(args)
-        print(packages)
+        # get requested packages from command line
+        installed_pkgs = env.list_installed(deep=False)
+        installed = set(pkg.project_name for pkg in installed_pkgs)
+        install_opts, wanted_pkgs = env.split_install_args(args)
+        if not wanted_pkgs:
+            die('no package to install')
+
+        # filter out installed packages with version specs removed
+        packages = [p for p in wanted_pkgs if pkg_name(p) not in installed]
+        if not packages:
+            die('all packages installed')
+
+        # run pip to install packages
+        install_opts.append('-q')
+        cmd = env.pip('install', install_opts + packages)
+        log('run ' + self._c(' '.join(cmd)))
+        code = os_run(cmd, PETAL_USE_CORE=1)
+        if code:
+            sys.exit(code)
+
+        env.add(packages)
+
+        log('packages installed to ' + self._y(env.path))
+
+
+    def cmd_del(self, args):
+        "Remove pakcages from env"
+
+        if len(args) > 2 and args[-2] == 'from':
+            env = PetalEnv(args[-1])
+            args = args[:-2]
+        else:
+            env = default_env()
+
+        cmd = env.pip('uninstall', ['-q', '-y'] + args)
+        log('run ' + self._c(' '.join(cmd)))
+        code = os_run(cmd, PETAL_USE_CORE=1)
+        if code:
+            sys.exit(code)
+
+        env.remove(packages)
+
+        log('packages removed from ' + self._y(env.path))
 
 
     def ensure_core(self):
@@ -108,14 +151,15 @@ class Petal(ColorMaker):
         if Path(env).expanduser().exists():
             return env
 
+        error = None
         try:
             self.env_new(env, is_core=True)
-        except:
+        except Exception as e:
             import shutil
             shutil.rmtree(env, ignore_errors=True)
-            env = None
-        if env is None:
-            die(f'failed to make core env {env}')
+            error = e
+        if error:
+            raise Error
 
         return env
 
@@ -150,7 +194,15 @@ class Petal(ColorMaker):
                 self.install_layers_hack(env)
                 msg += (' on top of [%s]' %
                         ', '.join([self._y(layer) for layer in layers]))
+            write_file(env / 'petal.pkgs')
+            write_file(env / 'petal.spec')
+            write_file(env / '.gitignore',
+                       ["*", "!petal.pkgs", "!petal.spec", ".gitignore"])
             log(msg)
+
+
+    def env_build(self, path):
+        ...
 
 
     def calc_layer_path(self, env, layer):
@@ -174,8 +226,9 @@ class Petal(ColorMaker):
             py = f'{env}/bin/python'
             whl = f'{tmp}/{fname}'
             download_url(pip_url, whl)
-            cmd = f'{py} {whl}/pip install --no-index -q {whl}'
-            os.system(cmd)
+            os_run(f'{py} {whl}/pip install --no-index -q {whl}')
+            # cache pip install command spec
+            PetalEnv(env)._get_install_spec()
             log('pip bootstrap done for ' + self._y(env))
 
 
@@ -263,6 +316,11 @@ class PetalEnv:
         if self.py_version is None:
             die(f'Python version not found in {self.cfg}')
 
+
+    def get_file(self, suffix):
+        return self.path / f'petal.{suffix}'
+
+
     @property
     def layers(self):
         "Iterate all direct base layers"
@@ -275,25 +333,78 @@ class PetalEnv:
         if self.is_core:
             return self
         for e in self.layers:
-            ret = e.core
-            if ret:
-                return ret
-        return None
+            # we don't need to loop through all layers
+            return e.core
+        die('core env not found')
+
+
+    def pip(self, cmd, args):
+        "Return pip command line as a string list"
+        ret = [str(self.path / 'bin' / 'python'), '-m' , 'pip', cmd]
+        if isinstance(args, list):
+            ret += args
+        else:
+            ret += args.split()
+        return ret
+
 
     @property
     def site_path(self):
-        "Path to package directory in this env"
+        "Site Path of this env"
         return self.path / 'lib' / f'python{self.py_version}' / 'site-packages'
 
-    def extract_package_names(self, args):
-        "Remove all command line switches of pip install"
+
+    def paths(self, include_core=True):
+        "Site Paths of this env and all base envs"
+        if include_core or not self.is_core:
+            ret = [str(self.site_path)]
+        else:
+            ret = []
+        for e in self.layers:
+            ret += e.paths(include_core)
+        return ret
+
+
+    @contextmanager
+    def tapped(self):
+        orig_path = sys.path
+        try:
+            sys.path = list(reversed(self.paths())) + sys.path
+            yield
+        finally:
+            sys.path = orig_path
+
+
+    def list_installed(self, deep=True):
+        search_paths = self.paths(include_core=False)
+        pkgs = []
+        with self.core.tapped():
+            from pip._internal.metadata import pkg_resources
+            e = pkg_resources.Environment.from_paths(search_paths)
+            dists = e.iter_installed_distributions()
+            pkgs = [d._dist for d in dists]
+        if deep:
+            return pkgs
+        return [p for p in pkgs if p.module_path == str(self.site_path)]
+
+
+    def split_install_args(self, args):
+        "Split args into pip install options and package names"
         ins_spec = self._get_install_spec()
+        idx = set()
         for i in range(len(args)):
             if args[i].startswith('-'):
+                idx.add(i)
                 if args[i] in ins_spec and i + 1 < len(args):
-                    args[i+1] = ''
-                args[i] = ''
-        return list(filter(None, args))
+                    idx.add(i + 1)
+        opts, pkgs = [], []
+        for i in range(len(args)):
+            if i in idx:
+                opts.append(args[i])
+            else:
+                pkgs.append(args[i])
+        return (opts, pkgs)
+
 
     # We need to extract package names from command line, but in theory all pip
     # install options should be supported.  The solution we use is to extract
@@ -313,10 +424,9 @@ class PetalEnv:
         if pip_ver in cache:
             return cache[pip_ver]
 
-        core_py = self.core.path / 'bin' / 'python'
-        cmd = [str(core_py), '-m' , 'pip', 'install', '--help']
         spec = []
-        for line in check_output(cmd).split('\n'):
+        pip_cmd = self.core.pip('install', '--help')
+        for line in check_output(pip_cmd).split('\n'):
             # this regexp filters out all options with argument
             if re.match('^\s{2,4}-[^ ].+\s+<[^ ]+>', line):
                 spec += [x for x in line.split() if x.startswith('-')]
@@ -329,6 +439,7 @@ class PetalEnv:
 
         return spec
 
+
     def _get_pip_version(self):
         "Look up pip version in core env"
         if self.core is None:
@@ -339,6 +450,27 @@ class PetalEnv:
                 if version:
                     return version
         return None
+
+
+    def add(self, pkg_specs):
+        pkgs = read_packages(self.get_file('pkgs'))
+        for pkg in pkg_specs:
+            if pkg_name(pkg) not in pkgs:
+                pkgs.append(pkg)
+        if pkgs:
+            write_file(self.get_file('pkgs'), '\n'.join(sorted(pkgs)))
+        self.freeze()
+
+
+    def remove(self, pkg_specs):
+        ...
+
+
+    def freeze(self, deep=False):
+        pkgs = [f'{p.project_name}=={p.version}'
+                for p in self.list_installed(deep=deep)]
+        write_file(self.get_file('spec'), pkgs)
+
 
     def __str__(self):
         return 'Petal%s(%s)' % (self.is_core and 'Core' or 'Env', self.path)
@@ -374,6 +506,10 @@ def grep(regexp, string, spec=1):
         return None
 
 
+def pkg_name(name):
+    return grep(r'^([a-zA-Z0-9_\-]+)', name)
+
+
 def download_url(url, filename=None, *, timeout=10):
     import urllib.request
     data = urllib.request.urlopen(url, timeout=timeout).read()
@@ -383,10 +519,23 @@ def download_url(url, filename=None, *, timeout=10):
     return data
 
 
-def write_file(fname, content):
+def write_file(fname, content=None):
+    if isinstance(content, list):
+        write_file(fname, '\n'.join(content))
+        return
     with open(fname, 'w+') as f:
-        f.write(content.strip())
-        f.write('\n')
+        if content:
+            f.write(content.strip())
+            f.write('\n')
+
+
+def read_packages(fname):
+    try:
+        with open(fname) as f:
+            return [line for line in [x.strip() for x in f.readlines()]
+                    if not line.startswith('#')]
+    except:
+        return []
 
 
 def log(*msg):
@@ -403,13 +552,18 @@ def default_env():
     return PetalEnv(envs[0])
 
 
-def list_packages(path):
-    try:
-        from pip._internal.metadata import pkg_resources
-        e = pkg_resources.Environment.from_paths([path])
-        return [d._dist for d in e.iter_installed_distributions(user_only=True)]
-    except:
-        return []
+def os_run(cmd, **env):
+    import subprocess
+    if isinstance(cmd, str):
+        cmd = cmd.split()
+    if env:
+        env_vars = os.environ.copy()
+        for key, val in env.items():
+            env_vars[key] = str(val)
+        return subprocess.call(cmd, env=env_vars)
+    else:
+        return subprocess.call(cmd)
+
 
 # class PkgTree:
 #     def __init__(self):
