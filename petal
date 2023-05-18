@@ -101,7 +101,7 @@ class Petal(ColorMaker):
         opts = [x for x in args if x.startswith('-')]
         args = [x for x in args if not x.startswith('-')]
         env = PetalEnv(args[0]) if len(args) else default_env()
-        version = '-v' in opts or '--version' in opts
+        show_version = '-v' in opts or '--version' in opts
         deep = '-d' in opts or '--deep' in opts
 
         installed = env.packages(deep=deep)
@@ -114,16 +114,16 @@ class Petal(ColorMaker):
         for spec in installed:
             name = pkg_name(spec)
             pkg = pkgs[name]
-            line = spec
-            if version:
+            line = pkg.env == this and f'- {spec}' or f'* {spec}'
+            if show_version:
                 line += f' {pkg.version}'
             if pkg.env != this:
                 line += f' [{tilde_path(pkg.env)}]'
-            print('+ ' + line)
+            print(line)
             for p, level in pkgs.walk(name):
                 prefix = '  ' * (level + 1)
                 name = p.name
-                if version:
+                if show_version:
                     name += f' {p.version}'
                 if p.env == this:
                     line = f'- {name}'
