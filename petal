@@ -204,13 +204,21 @@ class Petal(ColorMaker):
         return env
 
 
+    def _ensure_layer(self, layer):
+        if not os.path.exists(layer):
+            die(f'layer {layer} not found')
+        env = PetalEnv(layer)
+        if env.py_version != self.py_version:
+            die(f'layer version {env.py_version} != {self.py_version}')
+
+
     def env_new(self, path, layers=None, *, is_core=False):
         "make a new petal environment"
 
         if not os.path.exists(self.python):
             die(f'{self.python} not found')
-        if layers and not all(map(os.path.exists, layers)):
-            die(f'some base layer(s) not found')
+        for layer in layers:
+            self._ensure_layer(layer)
 
         env = Path(path).expanduser()
         if not is_core:
