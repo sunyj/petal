@@ -3,7 +3,7 @@ import sys, os, re, json
 from pathlib import Path
 from contextlib import suppress, contextmanager
 
-# remove dist-packages, make sure only std libraries are used
+# exclude dist-packages, make sure only std libraries are used
 sys.path = [p for p in sys.path if not re.search(r'/dist-packages$', p)]
 
 
@@ -18,12 +18,15 @@ def die_usage():
 
     Install package(s)
         petal add [pip install params ...] [to env]
-        petal install ... (an alias of add)
+              alias of add command: install
 
     Remove package(s)
         petal del [pip uninstall params ...] [from env]
-        petal remove ... (an alias of del)
-        petal uninstall ... (an alias of del)""")
+              aliases of del command: remove, uninstall
+
+    Show package(s)
+        petal show [env]
+""".strip())
 
     sys.exit(1)
 
@@ -103,15 +106,16 @@ class Petal(ColorMaker):
 
         pkgs = PackageSet(env.list_installed())
         this = str(env.path)
+        print(f'packages in {tilde_path(this)}:')
         for spec in installed:
             name = pkg_name(spec)
             pkg = pkgs[name]
             line = spec
             if pkg.env != this:
                 line += f' [{tilde_path(pkg.env)}]'
-            print(line)
+            print('+ ' + line)
             for p, level in pkgs.walk(name):
-                prefix = '  ' * level
+                prefix = '  ' * (level + 1)
                 if p.env == this:
                     line = f'- {p.name}'
                 else:
@@ -323,19 +327,14 @@ class Package:
         self.env = grep(r'^(.+)/lib/python.+/site-packages', pkg.module_path)
         self.version = pkg.version
         self.deps = [x.project_name for x in pkg.requires()]
-
     def __str__(self): return self.name
     def __hash__(self): return hash(self.name)
     def __eq__(self, rhs): return self.name == rhs.name
 
 
 class PackageSet:
-    def __init__(self, pkgs):
-        self.pkgs = {p.name: p for p in pkgs}
-
-    def __getitem__(self, key):
-        return self.pkgs[key]
-
+    def __init__(self, pkgs): self.pkgs = {p.name: p for p in pkgs}
+    def __getitem__(self, key): return self.pkgs[key]
     def walk(self, name, level=0):
         "depth first recursive walk"
         pkg = self.pkgs[name]
@@ -385,6 +384,7 @@ class PetalEnv:
         "Iterate all direct base layers"
         for p in self.bases:
             yield PetalEnv(p)
+
 
     @property
     def core(self):
@@ -623,26 +623,13 @@ def os_run(cmd, **env):
     else:
         return subprocess.call(cmd)
 
+
 def tilde_path(path):
     home = str(Path('~').expanduser())
     return re.sub('^' + home, '~', path) if path.startswith(home) else path
 
-# class PkgTree:
-#     def __init__(self):
-#         self.pkgs = defaultdict(set)
-
-#     def scan(self, path):
-#         try:
-#             from pip._internal.metadata import pkg_resources
-#             env = pkg_resources.Environment.from_paths(path)
-#             return [d._dist for d in
-#                     env.iter_installed_distributions(user_only=False)]
-#         except ImportError:
-#             from pip._internal.utils import misc
-#             return misc.get_installed_distributions(user_only=True)
 
 if __name__ == '__main__':
-    # print(list_packages('/usr/local/lib/python3.8/dist-packages'))
     Petal().run()
 
 ### petal ends here
