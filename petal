@@ -13,19 +13,21 @@ INSTALL_SPEC_CACHE = 'install-command-spec.json'
 
 def die_usage():
     print("""Usage: petal <command> [args ...]\n
-    Create / build / re-build an environment
-        petal make [env] [with /usr/bin/python3] [over layer ...]
+  Create or recover an environment
+       petal make [env] [with /usr/bin/python3] [over layer ...]
 
-    Install package(s)
-        petal add [pip install params ...] [to env]
-              alias of add command: install
+  Install package(s) to an environment
+       petal add [pip install params ...] [to env]
+             alias of add command: install
 
-    Remove package(s)
-        petal del [pip uninstall params ...] [from env]
-              aliases of del command: remove, uninstall
+  Remove package(s) from an environment
+       petal del [pip uninstall params ...] [from env]
+             aliases of del command: remove, uninstall
 
-    Show package(s)
-        petal show [-d --deep] [-v --version] [env]
+  Show package(s) in an environment
+       petal show [options] [env]
+             -d, --deep     show packages of base environments
+             -v, --version  show package version
 """.strip())
 
     sys.exit(1)
