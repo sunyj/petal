@@ -1,18 +1,30 @@
 #!/usr/bin/python3 -B
-import sys, os, re
+import sys, os, re, json
 from pathlib import Path
 
+# remove dist-packages, make sure only std libraries are used
+sys.path = [p for p in sys.path if not re.search(r'/dist-packages$', p)]
 
-USAGE = """Usage: petal <command> [args ...]\n
+
+CMD_ALIASES = {'install': 'add', 'remove': 'del', 'uninstall': 'del'}
+INSTALL_SPEC_CACHE = 'install-command-spec.json'
+
+
+def die_usage():
+    print("""Usage: petal <command> [args ...]\n
     Create / build / re-build an environment
         petal make [env] [with /usr/bin/python3] [over layer ...]
 
     Install package(s)
         petal add [pip install params ...] [to env]
+        petal install ... (an alias of add)
 
     Remove package(s)
         petal del [pip uninstall params ...] [from env]
-"""
+        petal remove ... (an alias of del)
+        petal uninstall ... (an alias of del)""")
+
+    sys.exit(1)
 
 
 class ColorMaker:
@@ -37,7 +49,6 @@ class Petal(ColorMaker):
         self.python = '/usr/bin/python3.8'
         # TODO: configurable pip URL
         self.pypi = 'https://pypi.tuna.tsinghua.edu.cn'
-        self.istty = sys.stdout.isatty()
 
 
     @property
@@ -55,10 +66,11 @@ class Petal(ColorMaker):
     def run(self):
         args = sys.argv[1:]
         if not args:
-            die(USAGE)
-        cmd = getattr(self, f'cmd_{args[0]}', None)
+            die_usage()
+        cmd_name = CMD_ALIASES.get(args[0], args[0])
+        cmd = getattr(self, f'cmd_{cmd_name}', None)
         if not cmd:
-            die(f'invalid command {args[0]}')
+            die(f'invalid command {cmd_name}')
         cmd(args[1:])
         exit(self.exit_code)
 
@@ -68,15 +80,27 @@ class Petal(ColorMaker):
         if not os.path.exists(env_dir):
             if len(args) > 2:
                 if args[1] != 'over' or len(args) < 3:
-                    die(USAGE)
+                    die_usage()
                 layers = args[2:]
             else:
                 layers = []
             self.env_new(env_dir, layers)
         else:
             if len(args) > 1:
-                die(USAGE)
+                die_usage()
             self.env_build(env_dir)
+
+
+    def cmd_add(self, args):
+        if len(args) > 2 and args[-2] == 'to':
+            env = PetalEnv(args[-1])
+            args = args[:-2]
+        else:
+            env = default_env()
+
+        # get package we want to install from command line
+        packages = env.extract_package_names(args)
+        print(packages)
 
 
     def ensure_core(self):
@@ -129,10 +153,6 @@ class Petal(ColorMaker):
             log(msg)
 
 
-    def env_build(self, path):
-        print('build', path)
-
-
     def calc_layer_path(self, env, layer):
         if layer[0] in ['~', '/']:
             return layer
@@ -141,7 +161,8 @@ class Petal(ColorMaker):
 
 
     def bootstrap_pip(self, env):
-        import json
+        "Download pip wheel package and install it."
+
         import tempfile
 
         data = json.loads(download_url(f'{self.pypi}/pypi/pip/json'))
@@ -159,6 +180,8 @@ class Petal(ColorMaker):
 
 
     def install_layers_hack(self, env):
+        "The magic of layered environments."
+
         site = env / 'lib' / f'python{self.py_version}' / 'site-packages'
         write_file(site / 'petal-layers.pth',
                    "import sys; __import__('_petal_layers').scan_layers()")
@@ -188,8 +211,8 @@ class EnvLayer:
                         layers = []
                         break
                     if key != 'above': continue
-                    for l in [x.strip() for x in val.split(',')]:
-                        layer = l[0] in ['/', '~'] and Path(l) or self.root / l
+                    for d in [x.strip() for x in val.split(',')]:
+                        layer = d[0] in ['/', '~'] and Path(d) or self.root / d
                         layer = layer.expanduser().resolve()
                         if layer.is_dir():
                             layers.append(layer)
@@ -207,6 +230,118 @@ def scan_layers():
     py_dir = Path(__file__).parent.parent
     EnvLayer(py_dir.parent.parent, py_dir.name).add_path(); envs = set()
 """)
+
+
+class PetalEnv:
+    def __init__(self, path):
+        self.path = Path(path).expanduser().resolve()
+        self.cfg = self.path / 'pyvenv.cfg'
+        if not self.cfg.is_file():
+            die(f'invalid env {path}')
+        self.is_core = False
+        self.bases = []
+        self.py_version = None
+        with open(self.cfg) as cfg:
+            for line in cfg.readlines():
+                line = line.strip()
+                if line.startswith('#'):
+                    continue
+                key, val = [x.strip() for x in line.split('=')]
+                if key == 'core' and val.lower() == 'true':
+                    self.is_core = True
+                    self.bases = []
+                    break
+                if key != 'above':
+                    if key == 'version':
+                        self.py_version = val
+                    continue
+                for d in [x.strip() for x in val.split(',')]:
+                    layer = d[0] in ['/', '~'] and Path(d) or self.path / d
+                    layer = layer.expanduser().resolve()
+                    if layer.is_dir():
+                        self.bases.append(layer)
+        if self.py_version is None:
+            die(f'Python version not found in {self.cfg}')
+
+    @property
+    def layers(self):
+        "Iterate all direct base layers"
+        for p in self.bases:
+            yield PetalEnv(p)
+
+    @property
+    def core(self):
+        "Find core env recursively"
+        if self.is_core:
+            return self
+        for e in self.layers:
+            ret = e.core
+            if ret:
+                return ret
+        return None
+
+    @property
+    def site_path(self):
+        "Path to package directory in this env"
+        return self.path / 'lib' / f'python{self.py_version}' / 'site-packages'
+
+    def extract_package_names(self, args):
+        "Remove all command line switches of pip install"
+        ins_spec = self._get_install_spec()
+        for i in range(len(args)):
+            if args[i].startswith('-'):
+                if args[i] in ins_spec and i + 1 < len(args):
+                    args[i+1] = ''
+                args[i] = ''
+        return list(filter(None, args))
+
+    # We need to extract package names from command line, but in theory all pip
+    # install options should be supported.  The solution we use is to extract
+    # and cache command line switches from `pip install --help` and use those
+    # to filter out options.
+    def _get_install_spec(self):
+        "Return pip install command-line spec of current version of pip"
+
+        cache_fname = self.core.path / INSTALL_SPEC_CACHE
+        if not cache_fname.exists():
+            write_file(cache_fname, '{}')
+        with open(cache_fname) as f:
+            cache = json.load(f)
+        pip_ver = self._get_pip_version()
+        if not pip_ver:
+            die(f'failed to get pip version in core env {self.core.path}')
+        if pip_ver in cache:
+            return cache[pip_ver]
+
+        core_py = self.core.path / 'bin' / 'python'
+        cmd = [str(core_py), '-m' , 'pip', 'install', '--help']
+        spec = []
+        for line in check_output(cmd).split('\n'):
+            # this regexp filters out all options with argument
+            if re.match('^\s{2,4}-[^ ].+\s+<[^ ]+>', line):
+                spec += [x for x in line.split() if x.startswith('-')]
+        spec = sorted(spec)
+
+        # cache the result
+        cache[pip_ver] = spec
+        with open(cache_fname, 'w+') as f:
+            json.dump(cache, f, indent=2)
+
+        return spec
+
+    def _get_pip_version(self):
+        "Look up pip version in core env"
+        if self.core is None:
+            die(f'core env not found for {self.path}')
+        for d in self.core.site_path.iterdir():
+            if d.is_dir():
+                version = grep(r'^pip-(.+)\.dist-info$', d.name)
+                if version:
+                    return version
+        return None
+
+    def __str__(self):
+        return 'Petal%s(%s)' % (self.is_core and 'Core' or 'Env', self.path)
 
 
 def die(msg):
@@ -228,6 +363,17 @@ def check_output(cmd):
     return subprocess.check_output(cmd).decode().strip()
 
 
+def grep(regexp, string, spec=1):
+    try:
+        mo = re.search(regexp, string)
+        if isinstance(spec, list):
+            return [mo.group(x) for x in spec]
+        else:
+            return mo.group(spec)
+    except:
+        return None
+
+
 def download_url(url, filename=None, *, timeout=10):
     import urllib.request
     data = urllib.request.urlopen(url, timeout=timeout).read()
@@ -247,7 +393,40 @@ def log(*msg):
     print(''.join([str(x) for x in msg]))
 
 
+def default_env():
+    envs = [d for d in Path(os.getcwd()).iterdir()
+            if d.is_dir() and (d / 'pyvenv.cfg').exists()]
+    if not envs:
+        die('No env found!')
+    if len(envs) > 1:
+        die('Multiple envs found, you need to choose one explicitly')
+    return PetalEnv(envs[0])
+
+
+def list_packages(path):
+    try:
+        from pip._internal.metadata import pkg_resources
+        e = pkg_resources.Environment.from_paths([path])
+        return [d._dist for d in e.iter_installed_distributions(user_only=True)]
+    except:
+        return []
+
+# class PkgTree:
+#     def __init__(self):
+#         self.pkgs = defaultdict(set)
+
+#     def scan(self, path):
+#         try:
+#             from pip._internal.metadata import pkg_resources
+#             env = pkg_resources.Environment.from_paths(path)
+#             return [d._dist for d in 
+#                     env.iter_installed_distributions(user_only=False)]
+#         except ImportError:
+#             from pip._internal.utils import misc
+#             return misc.get_installed_distributions(user_only=True)
+
 if __name__ == '__main__':
+    # print(list_packages('/usr/local/lib/python3.8/dist-packages'))
     Petal().run()
 
 ### petal ends here
