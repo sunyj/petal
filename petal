@@ -114,7 +114,7 @@ class Petal(ColorMaker):
         for spec in installed:
             name = pkg_name(spec)
             pkg = pkgs[name]
-            line = pkg.env == this and f'- {spec}' or f'* {spec}'
+            line = pkg.env == this and f'- {pkg.disp}' or f'* {pkg.disp}'
             if show_version:
                 line += f' {pkg.version}'
             if pkg.env != this:
@@ -122,13 +122,13 @@ class Petal(ColorMaker):
             print(line)
             for p, level in pkgs.walk(name):
                 prefix = '  ' * (level + 1)
-                name = p.name
+                dep = p.disp
                 if show_version:
-                    name += f' {p.version}'
+                    dep += f' {p.version}'
                 if p.env == this:
-                    line = f'- {name}'
+                    line = f'- {dep}'
                 else:
-                    line = f'* {name} [{tilde_path(p.env)}]'
+                    line = f'* {dep} [{tilde_path(p.env)}]'
                 print(prefix + line)
 
 
@@ -209,7 +209,8 @@ class Petal(ColorMaker):
             die(f'layer {layer} not found')
         env = PetalEnv(layer)
         if env.py_version != self.py_version:
-            die(f'layer version {env.py_version} != {self.py_version}')
+            path = tilde_path(os.path.realpath(layer))
+            die(f'{path} uses python{env.py_version}, need {self.py_version}')
 
 
     def env_new(self, path, layers=None, *, is_core=False):
@@ -340,21 +341,22 @@ def scan_layers():
 
 class Package:
     def __init__(self, pkg):
-        self.name = pkg.project_name
+        self.disp = pkg.project_name
+        self.name = self.disp.lower()
         self.env = grep(r'^(.+)/lib/python.+/site-packages', pkg.module_path)
         self.version = pkg.version
-        self.deps = [x.name.lower() for x in pkg.requires()]
-    def __str__(self): return self.name
+        self.deps = [x.name for x in pkg.requires()]
+    def __str__(self): return self.disp
     def __hash__(self): return hash(self.name)
     def __eq__(self, rhs): return self.name == rhs.name
 
 
 class PackageSet:
-    def __init__(self, pkgs): self.pkgs = {p.name.lower(): p for p in pkgs}
+    def __init__(self, pkgs): self.pkgs = {p.name: p for p in pkgs}
     def __getitem__(self, key): return self.pkgs[key.lower()]
     def walk(self, name, level=0):
         "depth first recursive walk"
-        pkg = self.pkgs[name.lower()]
+        pkg = self.pkgs[name]
         for dep in pkg.deps:
             yield (self.pkgs[dep], level + 1)
             yield from self.walk(dep, level + 1)
@@ -490,7 +492,7 @@ class PetalEnv:
             if i in idx:
                 opts.append(args[i])
             else:
-                pkgs.append(args[i])
+                pkgs.append(args[i].lower())
         return (opts, pkgs)
 
 
@@ -595,7 +597,7 @@ def grep(regexp, string, spec=1):
 
 
 def pkg_name(name):
-    return grep(r'^([a-zA-Z0-9_\-]+)', name)
+    return grep(r'^([a-zA-Z0-9_\-]+)', name).lower()
 
 
 def download_url(url, filename=None, *, timeout=10):
