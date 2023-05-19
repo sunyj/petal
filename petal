@@ -135,7 +135,7 @@ class Petal(ColorMaker):
             prefix = '  ' * level
             name = p.disp
             if show_version:
-                name += f' {p.version}'
+                name += f' {self._b(p.version)}'
             if p.native:
                 line = f'{sign} {name}'
             else:
@@ -147,13 +147,13 @@ class Petal(ColorMaker):
             die('empty env')
 
         pkgs = PackageSet(env)
-        print(f'packages in {tilde_path(str(env.path))}:')
+        print(f'packages in {self._y(env)}:')
         for spec in explicits:
             name = pkg_name(spec)
             pkg = pkgs[name]
-            line = pkg.native and f'+ {pkg.disp}' or f'* {pkg.disp}'
+            line = (pkg.native and '+ ' or '* ') + self._g(name)
             if show_version:
-                line += f' {pkg.version}'
+                line += f' {self._b(pkg.version)}'
             if not pkg.native:
                 line += f' [{tilde_path(pkg.env)}]'
             print(line)
@@ -177,7 +177,7 @@ class Petal(ColorMaker):
 
 
     def _run_pip(self, cmd):
-        log('run PETAL_USE_CORE=1' + self._c(tilde_path(' '.join(cmd))))
+        log('run ', self._c('PETAL_USE_CORE=1 ' + tilde_path(' '.join(cmd))))
         code = os_run(cmd, PETAL_USE_CORE=1)
         if code:
             sys.exit(code)
@@ -199,6 +199,8 @@ class Petal(ColorMaker):
         install_opts, wanted_specs = env.split_install_args(args)
         if not wanted_specs:
             die('no package to install')
+
+        pip_dryrun = '--dry-run' in install_opts
 
         # filter out installed packages with version specs removed
         wanted_pkgs = [pkg_name(p) for p in wanted_specs]
@@ -222,11 +224,13 @@ class Petal(ColorMaker):
         if dryrun:
             log(f'[{env}] plan to install: {self._pstr(packages)}')
             return
-        self._run_pip(env.pip('install', install_opts + ['-q'] + packages))
+        if not pip_dryrun:
+            install_opts.append('-q')
+        self._run_pip(env.pip('install', install_opts + packages))
 
-        env.add(packages)
-
-        log(f'[{env}] packages installed: {self._pstr(packages)}')
+        if not pip_dryrun:
+            env.add(packages)
+            log(f'[{env}] packages installed: {self._pstr(packages)}')
 
 
     def cmd_del(self, args, dryrun=False):
@@ -287,8 +291,8 @@ class Petal(ColorMaker):
                 msg += f'[{env}] plan to delist {self._pstr(delist)}'
             else:
                 msg += f'[{env}] delist {self._pstr(delist)} from explicit set'
-        elif not dryrun:
-            msg += f'[{env}] skip delisting {self._pstr(delist)}'
+        elif not dryrun and delist:
+            msg += f'[{env}] ignore {self._pstr(delist)}'
 
         wanted = uninstall + delist
         if wanted:
@@ -477,7 +481,7 @@ class Package:
         self.env = grep(r'^(.+)/lib/python.+/site-packages', pkg.module_path)
         self.native = True
         self.version = pkg.version
-        self.depon = [x.name for x in pkg.requires()]
+        self.depon = [x.name.lower() for x in pkg.requires()]
         self.depby = set()
     def __str__(self): return self.disp
     def __repr__(self): return f'Package({self.disp})'
