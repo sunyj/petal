@@ -15,7 +15,7 @@ INSTALL_SPEC_CACHE = 'install-command-spec.json'
 def die_usage():
     print("""Usage: petal <command> [args ...]\n
   Create or recover an environment
-       petal make [env] [with /usr/bin/python3] [over layer ...]
+       petal make [env] [with /usr/bin/python3] [over|on base_env ...]
 
   Install package(s) to an environment
        petal add [pip install params ...] [to env]
@@ -90,7 +90,7 @@ class Petal(ColorMaker):
         env_dir = args[0] if args else 'env'
         if not os.path.exists(env_dir):
             if len(args) > 2:
-                if args[1] != 'over' or len(args) < 3:
+                if args[1] not in ['over', 'on'] or len(args) < 3:
                     die_usage()
                 layers = args[2:]
             else:
