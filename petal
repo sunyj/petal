@@ -106,32 +106,42 @@ class Petal(ColorMaker):
         show_version = '-v' in opts or '--version' in opts
         deep = '-d' in opts or '--deep' in opts
 
-        installed = env.packages(deep=deep)
-        if not installed:
+        this = str(env.path)
+        def _pkg_line(p, level, sign='-'):
+            prefix = '  ' * level
+            name = p.disp
+            if show_version:
+                name += f' {p.version}'
+            if p.env == this:
+                line = f'{sign} {name}'
+            else:
+                line = f'* {name} [{tilde_path(p.env)}]'
+            return prefix + line
+
+        explicits = env.explicit_packages(deep=deep)
+        if not explicits:
             die('empty env')
 
         pkgs = PackageSet(env.list_installed())
-        this = str(env.path)
         print(f'packages in {tilde_path(this)}:')
-        for spec in installed:
+        for spec in explicits:
             name = pkg_name(spec)
             pkg = pkgs[name]
-            line = pkg.env == this and f'- {pkg.disp}' or f'* {pkg.disp}'
+            line = pkg.env == this and f'+ {pkg.disp}' or f'* {pkg.disp}'
             if show_version:
                 line += f' {pkg.version}'
             if pkg.env != this:
                 line += f' [{tilde_path(pkg.env)}]'
             print(line)
             for p, level in pkgs.walk(name):
-                prefix = '  ' * (level + 1)
-                dep = p.disp
-                if show_version:
-                    dep += f' {p.version}'
-                if p.env == this:
-                    line = f'- {dep}'
-                else:
-                    line = f'* {dep} [{tilde_path(p.env)}]'
-                print(prefix + line)
+                print(_pkg_line(p, level))
+
+        explicit_names = set(pkg_name(p) for p in explicits)
+        orphans = [p for p in pkgs.orphans() if p.name not in explicit_names]
+        if orphans:
+            print('- (orphans)')
+            for p in orphans:
+                print(_pkg_line(p, 1, '?'))
 
 
     def cmd_add(self, args):
@@ -347,21 +357,35 @@ class Package:
         self.name = self.disp.lower()
         self.env = grep(r'^(.+)/lib/python.+/site-packages', pkg.module_path)
         self.version = pkg.version
-        self.deps = [x.name for x in pkg.requires()]
+        self.depon = [x.name for x in pkg.requires()]
+        self.depby = set()
     def __str__(self): return self.disp
+    def __repr__(self): return f'Package({self.disp})'
     def __hash__(self): return hash(self.name)
     def __eq__(self, rhs): return self.name == rhs.name
+    def __lt__(self, rhs): return self.name < rhs.name
 
 
 class PackageSet:
-    def __init__(self, pkgs): self.pkgs = {p.name: p for p in pkgs}
-    def __getitem__(self, key): return self.pkgs[key.lower()]
+    def __init__(self, pkgs):
+        self.pkgs = {p.name: p for p in pkgs}
+        # resolve dependency network
+        for name, pkg in self.pkgs.items():
+            for dep in pkg.depon:
+                self.pkgs[dep].depby.add(dep)
+
+    def __getitem__(self, key):
+        return self.pkgs[key.lower()]
+
     def walk(self, name, level=0):
         "depth first recursive walk"
         pkg = self.pkgs[name]
-        for dep in pkg.deps:
+        for dep in pkg.depon:
             yield (self.pkgs[dep], level + 1)
             yield from self.walk(dep, level + 1)
+
+    def orphans(self):
+        return sorted([pkg for pkg in self.pkgs.values() if not pkg.depby])
 
 
 class PetalEnv:
@@ -424,15 +448,15 @@ class PetalEnv:
         return self.path / 'lib' / f'python{self.py_version}' / 'site-packages'
 
 
-    def packages(self, deep=False):
-        "Wanted packages"
+    def explicit_packages(self, deep=False):
+        "Explicit packages"
         pkgs = []
         with suppress(Exception):
             with open(self.get_file('pkgs')) as f:
                 pkgs = [line.strip() for line in f]
         if deep:
             for layer in self.layers:
-                pkgs += layer.packages(deep=True)
+                pkgs += layer.explicit_packages(deep=True)
         return sorted(pkgs)
 
 
