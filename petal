@@ -176,8 +176,11 @@ class Petal(ColorMaker):
         return self._g(kgs)
 
 
-    def _run_pip(self, cmd):
-        log('run ', self._c('PETAL_USE_CORE=1 ' + tilde_path(' '.join(cmd))))
+    def _run_pip(self, cmd, dry=False):
+        run = dry and 'plan to run ' or 'run '
+        log(run, self._c('PETAL_USE_CORE=1 ' + tilde_path(' '.join(cmd))))
+        if dry:
+            return
         code = os_run(cmd, PETAL_USE_CORE=1)
         if code:
             sys.exit(code)
@@ -203,10 +206,11 @@ class Petal(ColorMaker):
         pip_dryrun = '--dry-run' in install_opts
 
         # filter out installed packages with version specs removed
-        wanted_pkgs = [pkg_name(p) for p in wanted_specs]
-        packages = [p for p in wanted_pkgs if p not in installed]
-        if not packages:
-            # handle this case: package installed but not in the explicit set
+        wanted_pkgs = {pkg_name(p): p for p in wanted_specs}
+        new_packages = [p for p in wanted_pkgs if p not in installed]
+
+        # handle promotion: package installed but not in the explicit set
+        if not new_packages:
             explicits = set(pkg_name(p) for p in env.explicit_packages())
             selected = [p for p in wanted_pkgs if p not in explicits]
             if selected:
@@ -220,17 +224,15 @@ class Petal(ColorMaker):
             return
 
         # run pip to install packages
-        pip_cmd = env.pip('install', install_opts + ['-q'] + packages)
+        install_pkgs = sorted([wanted_pkgs[p] for p in new_packages])
+        pip_cmd = env.pip('install', install_opts + install_pkgs)
+        self._run_pip(pip_cmd, dry=dryrun)
         if dryrun:
-            log(f'[{env}] plan to install: {self._pstr(packages)}')
             return
-        if not pip_dryrun:
-            install_opts.append('-q')
-        self._run_pip(env.pip('install', install_opts + packages))
 
         if not pip_dryrun:
-            env.add(packages)
-            log(f'[{env}] packages installed: {self._pstr(packages)}')
+            env.add(install_pkgs)
+            log(f'[{env}] packages installed: {self._pstr(install_pkgs)}')
 
 
     def cmd_del(self, args, dryrun=False):
@@ -251,7 +253,8 @@ class Petal(ColorMaker):
         wanted = [p.lower() for p in args]
         unknwon = [p for p in wanted if p not in iset]
         if unknwon:
-            die(f'[{env}] unknown packages: {self._pstr(unknwon)}')
+            warn = self._r('unknown packages')
+            die(f'[{env}] {warn}: {self._pstr(unknwon)}')
 
         # allow delisting packages without uninstalling them
         wanted_set = set(wanted)
@@ -282,11 +285,11 @@ class Petal(ColorMaker):
             if orphans:
                 msg += f', with dependencies: {self._pstr(orphans)}'
 
-        if msg:
-            msg += '\n'
         real_delist = [p for p in delist if p in explicits]
         if real_delist:
             delist = real_delist
+            if msg:
+                msg += '\n'
             if dryrun:
                 msg += f'[{env}] plan to delist {self._pstr(delist)}'
             else:
@@ -717,9 +720,10 @@ class PetalEnv(ColorMaker):
         if not isinstance(pkg_specs, list):
             self.add([pkg_specs], freeze=freeze)
             return
-        pkgs = read_packages(self.get_file('pkgs'))
-        added = set(pkg_name(p) for p in pkg_specs)
-        pkgs = sorted(list(set(pkgs) | added))
+        specs = {pkg_name(p): p for p in read_packages(self.get_file('pkgs'))}
+        for p in pkg_specs:
+            specs[pkg_name(p)] = p
+        pkgs = sorted(list(specs.values()))
         if pkgs:
             write_file(self.get_file('pkgs'), '\n'.join(pkgs))
         if freeze:
@@ -730,11 +734,10 @@ class PetalEnv(ColorMaker):
         if not isinstance(pkg_specs, list):
             self.remove([pkg_specs], freeze=freeze)
             return
-        pkgs = read_packages(self.get_file('pkgs'))
         dels = set(pkg_name(p) for p in pkg_specs)
-        pkgs = sorted(list(set(pkgs) - dels))
-        if pkgs:
-            write_file(self.get_file('pkgs'), '\n'.join(pkgs))
+        specs = {pkg_name(p): p for p in read_packages(self.get_file('pkgs'))}
+        pkgs = sorted([specs[p] for p in specs if p not in dels])
+        write_file(self.get_file('pkgs'), '\n'.join(pkgs))
         if freeze:
             self.freeze()
 
@@ -814,7 +817,9 @@ def read_packages(fname):
 
 
 def log(*msg):
-    print(''.join([str(x) for x in msg]))
+    line = ''.join([str(x) for x in msg])
+    if line:
+        print(line)
 
 
 def default_env():
