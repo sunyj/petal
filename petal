@@ -56,10 +56,9 @@ class Petal(ColorMaker):
     def __init__(self):
         super().__init__()
         self.exit_code = 0
-        # TODO: configurable Python version
         self.python = '/usr/bin/python3.8'
-        # TODO: configurable pip URL
-        self.pypi = 'https://pypi.tuna.tsinghua.edu.cn'
+        self.pypi = os.environ.get('PETAL_PYPI',
+                                   'https://pypi.tuna.tsinghua.edu.cn')
 
 
     @property
@@ -90,9 +89,21 @@ class Petal(ColorMaker):
         env_dir = args[0] if args else 'env'
         if not os.path.exists(env_dir):
             if len(args) > 2:
-                if args[1] not in ['over', 'on'] or len(args) < 3:
+                args = args[1:]
+                if 'with' in args:
+                    idx = args.index('with') + 1
+                    if idx >= len(args):
+                        die_usage()
+                    self.python = args[idx]
+                    if not os.path.exists(self.python):
+                        die(f'{self.python} not found!')
+                    self.python = os.path.realpath(self.python)
+                    args[idx] = ''
+                    args[idx-1] = ''
+                    args = list(filter(None, args))
+                if args[0] not in ['over', 'on'] or len(args) < 2:
                     die_usage()
-                layers = args[2:]
+                layers = args[1:]
             else:
                 layers = []
             self.env_new(env_dir, layers)
@@ -361,6 +372,7 @@ class Petal(ColorMaker):
                 self.install_layers_hack(env)
                 msg += (' on top of [%s]' %
                         ', '.join([self._y(layer) for layer in layers]))
+                msg += f' with {self._g(self.python)}'
             write_file(env / 'petal.base', layers)
             write_file(env / 'petal.pkgs')
             write_file(env / 'petal.spec')
