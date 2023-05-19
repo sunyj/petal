@@ -2,6 +2,7 @@
 import sys, os, re, json
 from pathlib import Path
 from contextlib import suppress, contextmanager
+from collections.abc import Iterable
 
 # exclude dist-packages, make sure only std libraries are used
 sys.path = [p for p in sys.path if not re.search(r'/dist-packages$', p)]
@@ -28,6 +29,9 @@ def die_usage():
        petal show [options] [env]
              -d, --deep     show packages of base environments
              -v, --version  show package version
+
+  Print action plans
+       petal plan add | del ... [on env]
 """.strip())
 
     sys.exit(1)
@@ -50,12 +54,12 @@ class ColorMaker:
 
 class Petal(ColorMaker):
     def __init__(self):
+        super().__init__()
         self.exit_code = 0
         # TODO: configurable Python version
         self.python = '/usr/bin/python3.8'
         # TODO: configurable pip URL
         self.pypi = 'https://pypi.tuna.tsinghua.edu.cn'
-        super().__init__()
 
 
     @property
@@ -103,9 +107,11 @@ class Petal(ColorMaker):
 
         opts = [x for x in args if x.startswith('-')]
         args = [x for x in args if not x.startswith('-')]
-        env = PetalEnv(args[0]) if len(args) else default_env()
         show_version = '-v' in opts or '--version' in opts
         deep = '-d' in opts or '--deep' in opts
+
+        # find the env we're working on
+        env = PetalEnv(args[0]) if len(args) else default_env()
 
         def _pkg_line(p, level, sign='-'):
             prefix = '  ' * level
@@ -145,9 +151,24 @@ class Petal(ColorMaker):
                 print(_pkg_line(p, 1, '?'))
 
 
-    def cmd_add(self, args):
+    def _pstr(self, pkgs):
+        "Package display helper"
+        if isinstance(pkgs, Iterable):
+            return ', '.join(self._g(p) for p in pkgs)
+        return self._g(kgs)
+
+
+    def _run_pip(self, cmd):
+        log('run PETAL_USE_CORE=1' + self._c(tilde_path(' '.join(cmd))))
+        code = os_run(cmd, PETAL_USE_CORE=1)
+        if code:
+            sys.exit(code)
+
+
+    def cmd_add(self, args, dryrun=False):
         "Install pakcages to env"
 
+        # find the env we're working on
         if len(args) > 2 and args[-2] == 'to':
             env = PetalEnv(args[-1])
             args = args[:-2]
@@ -169,66 +190,116 @@ class Petal(ColorMaker):
             explicits = set(pkg_name(p) for p in env.explicit_packages())
             selected = [p for p in wanted_pkgs if p not in explicits]
             if selected:
-                env.add(selected, freeze=False)
-                log('set ', ', '.join([self._g(p) for p in selected]),
-                    ' as explicit in ', self._y(env.path))
-                return
+                if dryrun:
+                    log(f'[{env}] plan to promote {self._pstr(selected)}')
+                else:
+                    env.add(selected, freeze=False)
+                    log(f'[{env}] promote {self._pstr(selected)} as explicit')
             else:
-                die('all packages installed')
+                log(dryrun and 'nothing in plan' or 'nothing to change')
+            return
 
         # run pip to install packages
-        install_opts.append('-q')
-        cmd = env.pip('install', install_opts + packages)
-        log('run ' + self._c(' '.join(cmd)))
-        code = os_run(cmd, PETAL_USE_CORE=1)
-        if code:
-            sys.exit(code)
+        pip_cmd = env.pip('install', install_opts + ['-q'] + packages)
+        if dryrun:
+            log(f'[{env}] plan to install: {self._pstr(packages)}')
+            return
+        self._run_pip(env.pip('install', install_opts + ['-q'] + packages))
 
         env.add(packages)
 
-        log('packages installed to ' + self._y(env.path))
+        log(f'[{env}] packages installed: {self._pstr(packages)}')
 
 
-    def cmd_del(self, args):
+    def cmd_del(self, args, dryrun=False):
         "Remove pakcages from env"
 
+        # find the env we're working on
         if len(args) > 2 and args[-2] == 'from':
             env = PetalEnv(args[-1])
             args = args[:-2]
         else:
             env = default_env()
-        env_str = self._y(env.path)
 
-        # check dependencies to remove
-        wanted = [p.lower() for p in args]
-        collaterals = set()
+        # installed packages set
         iset = PackageSet(env)
-        for pkg in wanted:
-            if not pkg in iset:
-                die(f'package ' + self._g(pkg) + ' not found in ' + env_str)
-            collaterals.update([p for p in iset.deps(pkg)])
-        # keep a collateral package if it's still needed by other packages
-        dels = set(wanted)
-        collaterals = [p.name for p in collaterals
-                       if p.native and not iset[p.name].depby - dels]
+        explicits = set(pkg_name(p) for p in env.explicit_packages())
 
-        cmd = env.pip('uninstall', ['-q', '-y'] + wanted + collaterals)
-        log('run ' + self._c(' '.join(cmd)))
-        # code = os_run(cmd, PETAL_USE_CORE=1)
-        # if code:
-        #     sys.exit(code)
+        # find collateral packages (dependencies) to remove
+        wanted = [p.lower() for p in args]
+        unknwon = [p for p in wanted if p not in iset]
+        if unknwon:
+            die(f'[{env}] unknown packages: {self._pstr(unknwon)}')
 
-        env.remove(wanted)
-        if len(wanted) > 1:
-            msg = 'packages removed from ' + self._y(env.path) + ':\n  '
+        # allow delisting packages without uninstalling them
+        wanted_set = set(wanted)
+        uninstall = [p for p in wanted if not iset[p].depby - wanted_set]
+        delist = [p for p in wanted if p not in uninstall]
+
+        msg = ''
+        if uninstall:
+            collaterals = set()
+            for name in uninstall:
+                if not name in iset:
+                    die(f'package {self._g(name)} not found in {env}')
+                collaterals.update(p for p in iset.dep_on(name))
+            removing = set(iset[p] for p in uninstall) | collaterals
+            orphans = [p.name for p in collaterals # a package is orphaned if it's:
+                       # native (never remove packages in base envs), and
+                       if p.native and
+                       # not in explicit set, and
+                       p.name not in explicits and
+                       # not needed by any other packages except those on the list
+                       not set(iset.dep_by(p.name)) - removing]
+            cmd = env.pip('uninstall', ['-q', '-y'] + uninstall + orphans)
+            if not dryrun:
+                self._run_pip(cmd)
+                msg += f'[{env}] uninstalled: {self._pstr(uninstall)}'
+            else:
+                msg += f'[{env}] plan to uninstall: {self._pstr(uninstall)}'
+            if orphans:
+                msg += f', with dependencies: {self._pstr(orphans)}'
+
+        if msg:
+            msg += '\n'
+        real_delist = [p for p in delist if p in explicits]
+        if real_delist:
+            delist = real_delist
+            if dryrun:
+                msg += f'[{env}] plan to delist {self._pstr(delist)}'
+            else:
+                msg += f'[{env}] delist {self._pstr(delist)} from explicit set'
+        elif not dryrun:
+            msg += f'[{env}] skip delisting {self._pstr(delist)}'
+
+        wanted = uninstall + delist
+        if wanted:
+            if dryrun:
+                log(msg or 'nothing in plan')
+            else:
+                env.remove(wanted)
+                log(msg)
         else:
-            msg = 'package removed from ' + self._y(env.path) + ': '
-        msg += ', '.join([self._g(p) for p in wanted])
-        if collaterals:
-            plural = len(collaterals) > 1 and 'dependencies' or 'dependency'
-            msg += f', with {plural}: '
-            msg += ', '.join([self._g(p) for p in collaterals])
-        log(msg)
+            log('nothing to change')
+
+
+    def cmd_plan(self, args):
+        "Print action plans"
+
+        if len(args) < 2:
+            die_usage()
+        cmd = CMD_ALIASES.get(args[0], args[0])
+        args = args[1:]
+        if cmd == 'add':
+            if len(args) > 2 and args[-2] == 'on':
+                args[-2] = 'to'
+            self.cmd_add(args, dryrun=True)
+        elif cmd == 'del':
+            if len(args) > 2 and args[-2] == 'on':
+                args[-2] = 'from'
+            self.cmd_del(args, dryrun=True)
+        else:
+            die_usage()
 
 
     def ensure_core(self):
@@ -283,10 +354,9 @@ class Petal(ColorMaker):
                 cfg.write(f'core = true\n')
         if is_core:
             self.bootstrap_pip(os.path.realpath(env))
-            log(f'petal core for python {self.py_version} made: ',
-                self._y(path))
+            log(f'petal core (python{self.py_version}) made: {self._y(path)}')
         else:
-            msg = 'environment ' + self._y(path) + ' made'
+            msg = f'environment {self._y(path)} made'
             if layers:
                 self.install_layers_hack(env)
                 msg += (' on top of [%s]' %
@@ -328,7 +398,7 @@ class Petal(ColorMaker):
             os_run(f'{py} {whl}/pip install --no-index -q {whl}')
             # cache pip install command spec
             PetalEnv(env)._get_install_spec()
-            log('pip bootstrap done for ' + self._y(env))
+            log(f'pip bootstrap done for {self._y(env)}')
 
 
     def install_layers_hack(self, env):
@@ -424,19 +494,27 @@ class PackageSet:
             yield (self.pkgs[dep], level + 1)
             yield from self.walk(dep, level + 1)
 
-    def deps(self, name):
+    def dep_on(self, name):
         "get all dependencies"
         pkg = self.pkgs[name]
         for dep in pkg.depon:
-            yield (self.pkgs[dep])
-            yield from self.deps(dep)
+            yield self.pkgs[dep]
+            yield from self.dep_on(dep)
+
+    def dep_by(self, name):
+        "get all reverse dependencies"
+        pkg = self.pkgs[name]
+        for dep in pkg.depby:
+            yield self.pkgs[dep]
+            yield from self.dep_by(dep)
 
     def orphans(self):
         return sorted([pkg for pkg in self.pkgs.values() if not pkg.depby])
 
 
-class PetalEnv:
+class PetalEnv(ColorMaker):
     def __init__(self, path):
+        super().__init__()
         self.path = Path(path).expanduser().resolve()
         env_cfg = self.path / 'pyvenv.cfg'
         if not env_cfg.is_file():
@@ -621,7 +699,7 @@ class PetalEnv:
             return
         pkgs = read_packages(self.get_file('pkgs'))
         added = set(pkg_name(p) for p in pkg_specs)
-        pkgs = sorted(list(set(pkgs) + added))
+        pkgs = sorted(list(set(pkgs) | added))
         if pkgs:
             write_file(self.get_file('pkgs'), '\n'.join(pkgs))
         if freeze:
@@ -648,6 +726,10 @@ class PetalEnv:
 
 
     def __str__(self):
+        return self._y(tilde_path(str(self.path)))
+
+
+    def __repr__(self):
         return 'Petal%s(%s)' % (self.is_core and 'Core' or 'Env', self.path)
 
 
@@ -742,7 +824,8 @@ def os_run(cmd, **env):
 
 def tilde_path(path):
     home = str(Path('~').expanduser())
-    return re.sub('^' + home, '~', path) if path.startswith(home) else path
+    p = str(path)
+    return re.sub('^' + home, '~', p) if p.startswith(home) else p
 
 
 if __name__ == '__main__':
