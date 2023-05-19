@@ -1,8 +1,15 @@
 #!/usr/bin/python3 -B
-import sys, os, re, json
+import os
+import re
+import sys
+import json
+import shutil
+import tempfile
+import subprocess
+import urllib.request
 from pathlib import Path
-from contextlib import suppress, contextmanager
 from collections.abc import Iterable
+from contextlib import suppress, contextmanager
 
 # exclude dist-packages, make sure only std libraries are used
 sys.path = [p for p in sys.path if not re.search(r'/dist-packages$', p)]
@@ -322,7 +329,6 @@ class Petal(ColorMaker):
         try:
             self.env_new(env, is_core=True)
         except Exception as e:
-            import shutil
             shutil.rmtree(env, ignore_errors=True)
             error = e
         if error:
@@ -395,8 +401,6 @@ class Petal(ColorMaker):
 
     def bootstrap_pip(self, env):
         "Download pip wheel package and install it."
-
-        import tempfile
 
         data = json.loads(download_url(f'{self.pypi}/pypi/pip/json'))
         pip_url = re.sub(r'https?://[^/]*', self.pypi, data['urls'][0]['url'])
@@ -758,7 +762,6 @@ def make_dir(path):
 
 
 def check_output(cmd):
-    import subprocess
     if isinstance(cmd, str):
         cmd = cmd.split()
     return subprocess.check_output(cmd).decode().strip()
@@ -780,7 +783,6 @@ def pkg_name(name):
 
 
 def download_url(url, filename=None, *, timeout=10):
-    import urllib.request
     data = urllib.request.urlopen(url, timeout=timeout).read()
     if filename:
         with open(filename, 'wb+') as f:
@@ -822,7 +824,6 @@ def default_env():
 
 
 def os_run(cmd, **env):
-    import subprocess
     if isinstance(cmd, str):
         cmd = cmd.split()
     if env:
