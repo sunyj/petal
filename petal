@@ -156,14 +156,24 @@ class Petal(ColorMaker):
         # get requested packages from command line
         installed_pkgs = env.list_installed(deep=False)
         installed = set(pkg.name for pkg in installed_pkgs)
-        install_opts, wanted_pkgs = env.split_install_args(args)
-        if not wanted_pkgs:
+        install_opts, wanted_specs = env.split_install_args(args)
+        if not wanted_specs:
             die('no package to install')
 
         # filter out installed packages with version specs removed
-        packages = [p for p in wanted_pkgs if pkg_name(p) not in installed]
+        wanted_pkgs = [pkg_name(p) for p in wanted_specs]
+        packages = [p for p in wanted_pkgs if p not in installed]
         if not packages:
-            die('all packages installed')
+            # handle this case: package installed but not in the explicit set
+            explicits = set(pkg_name(p) for p in env.explicit_packages())
+            selected = [p for p in wanted_pkgs if p not in explicits]
+            if selected:
+                env.add(selected, freeze=False)
+                log('set ', ', '.join([self._g(p) for p in selected]),
+                    ' as explicit in ', self._y(env.path))
+                return
+            else:
+                die('all packages installed')
 
         # run pip to install packages
         install_opts.append('-q')
@@ -568,14 +578,15 @@ class PetalEnv:
         return None
 
 
-    def add(self, pkg_specs):
+    def add(self, pkg_specs, freeze=True):
         pkgs = read_packages(self.get_file('pkgs'))
         for pkg in pkg_specs:
             if pkg_name(pkg) not in pkgs:
                 pkgs.append(pkg)
         if pkgs:
             write_file(self.get_file('pkgs'), '\n'.join(sorted(pkgs)))
-        self.freeze()
+        if freeze:
+            self.freeze()
 
 
     def remove(self, pkg_specs):
