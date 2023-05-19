@@ -57,6 +57,7 @@ class Petal(ColorMaker):
         self.pypi = 'https://pypi.tuna.tsinghua.edu.cn'
         super().__init__()
 
+
     @property
     def user_site(self):
         return re.sub(r'^.+/(lib.+/site-packages)$', r'\1',
@@ -106,13 +107,12 @@ class Petal(ColorMaker):
         show_version = '-v' in opts or '--version' in opts
         deep = '-d' in opts or '--deep' in opts
 
-        this = str(env.path)
         def _pkg_line(p, level, sign='-'):
             prefix = '  ' * level
             name = p.disp
             if show_version:
                 name += f' {p.version}'
-            if p.env == this:
+            if p.native:
                 line = f'{sign} {name}'
             else:
                 line = f'* {name} [{tilde_path(p.env)}]'
@@ -122,22 +122,23 @@ class Petal(ColorMaker):
         if not explicits:
             die('empty env')
 
-        pkgs = PackageSet(env.list_installed())
-        print(f'packages in {tilde_path(this)}:')
+        pkgs = PackageSet(env)
+        print(f'packages in {tilde_path(str(env.path))}:')
         for spec in explicits:
             name = pkg_name(spec)
             pkg = pkgs[name]
-            line = pkg.env == this and f'+ {pkg.disp}' or f'* {pkg.disp}'
+            line = pkg.native and f'+ {pkg.disp}' or f'* {pkg.disp}'
             if show_version:
                 line += f' {pkg.version}'
-            if pkg.env != this:
+            if not pkg.native:
                 line += f' [{tilde_path(pkg.env)}]'
             print(line)
             for p, level in pkgs.walk(name):
                 print(_pkg_line(p, level))
 
         explicit_names = set(pkg_name(p) for p in explicits)
-        orphans = [p for p in pkgs.orphans() if p.name not in explicit_names]
+        orphans = [p for p in pkgs.orphans()
+                   if p.native and p.name not in explicit_names]
         if orphans:
             print('- (orphans)')
             for p in orphans:
@@ -196,16 +197,38 @@ class Petal(ColorMaker):
             args = args[:-2]
         else:
             env = default_env()
+        env_str = self._y(env.path)
 
-        cmd = env.pip('uninstall', ['-q', '-y'] + args)
+        # check dependencies to remove
+        wanted = [p.lower() for p in args]
+        collaterals = set()
+        iset = PackageSet(env)
+        for pkg in wanted:
+            if not pkg in iset:
+                die(f'package ' + self._g(pkg) + ' not found in ' + env_str)
+            collaterals.update([p for p in iset.deps(pkg)])
+        # keep a collateral package if it's still needed by other packages
+        dels = set(wanted)
+        collaterals = [p.name for p in collaterals
+                       if p.native and not iset[p.name].depby - dels]
+
+        cmd = env.pip('uninstall', ['-q', '-y'] + wanted + collaterals)
         log('run ' + self._c(' '.join(cmd)))
-        code = os_run(cmd, PETAL_USE_CORE=1)
-        if code:
-            sys.exit(code)
+        # code = os_run(cmd, PETAL_USE_CORE=1)
+        # if code:
+        #     sys.exit(code)
 
-        env.remove(packages)
-
-        log('packages removed from ' + self._y(env.path))
+        env.remove(wanted)
+        if len(wanted) > 1:
+            msg = 'packages removed from ' + self._y(env.path) + ':\n  '
+        else:
+            msg = 'package removed from ' + self._y(env.path) + ': '
+        msg += ', '.join([self._g(p) for p in wanted])
+        if collaterals:
+            plural = len(collaterals) > 1 and 'dependencies' or 'dependency'
+            msg += f', with {plural}: '
+            msg += ', '.join([self._g(p) for p in collaterals])
+        log(msg)
 
 
     def ensure_core(self):
@@ -366,6 +389,7 @@ class Package:
         self.disp = pkg.project_name
         self.name = self.disp.lower()
         self.env = grep(r'^(.+)/lib/python.+/site-packages', pkg.module_path)
+        self.native = True
         self.version = pkg.version
         self.depon = [x.name for x in pkg.requires()]
         self.depby = set()
@@ -377,15 +401,21 @@ class Package:
 
 
 class PackageSet:
-    def __init__(self, pkgs):
-        self.pkgs = {p.name: p for p in pkgs}
+    def __init__(self, env, deep=True):
+        self.pkgs = {p.name: p for p in env.list_installed(deep=deep)}
         # resolve dependency network
+        this_env = str(env.path)
         for name, pkg in self.pkgs.items():
+            pkg.native = pkg.env == this_env
             for dep in pkg.depon:
-                self.pkgs[dep].depby.add(dep)
+                if dep in self.pkgs:
+                    self.pkgs[dep].depby.add(name)
 
     def __getitem__(self, key):
         return self.pkgs[key.lower()]
+
+    def __contains__(self, key):
+        return key.lower() in self.pkgs
 
     def walk(self, name, level=0):
         "depth first recursive walk"
@@ -393,6 +423,13 @@ class PackageSet:
         for dep in pkg.depon:
             yield (self.pkgs[dep], level + 1)
             yield from self.walk(dep, level + 1)
+
+    def deps(self, name):
+        "get all dependencies"
+        pkg = self.pkgs[name]
+        for dep in pkg.depon:
+            yield (self.pkgs[dep])
+            yield from self.deps(dep)
 
     def orphans(self):
         return sorted([pkg for pkg in self.pkgs.values() if not pkg.depby])
@@ -579,18 +616,29 @@ class PetalEnv:
 
 
     def add(self, pkg_specs, freeze=True):
+        if not isinstance(pkg_specs, list):
+            self.add([pkg_specs], freeze=freeze)
+            return
         pkgs = read_packages(self.get_file('pkgs'))
-        for pkg in pkg_specs:
-            if pkg_name(pkg) not in pkgs:
-                pkgs.append(pkg)
+        added = set(pkg_name(p) for p in pkg_specs)
+        pkgs = sorted(list(set(pkgs) + added))
         if pkgs:
-            write_file(self.get_file('pkgs'), '\n'.join(sorted(pkgs)))
+            write_file(self.get_file('pkgs'), '\n'.join(pkgs))
         if freeze:
             self.freeze()
 
 
-    def remove(self, pkg_specs):
-        ...
+    def remove(self, pkg_specs, freeze=True):
+        if not isinstance(pkg_specs, list):
+            self.remove([pkg_specs], freeze=freeze)
+            return
+        pkgs = read_packages(self.get_file('pkgs'))
+        dels = set(pkg_name(p) for p in pkg_specs)
+        pkgs = sorted(list(set(pkgs) - dels))
+        if pkgs:
+            write_file(self.get_file('pkgs'), '\n'.join(pkgs))
+        if freeze:
+            self.freeze()
 
 
     def freeze(self, deep=False):
