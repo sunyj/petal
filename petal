@@ -24,15 +24,15 @@ def die_usage():
   Create or recover an environment
        petal make [env] [with /usr/bin/python3] [over|on base_env ...]
 
-  Install package(s) to an environment
+  Install packages
        petal add [pip install params ...] [to env]
              alias of add command: install
 
-  Remove package(s) from an environment
+  Remove packages
        petal del [pip uninstall params ...] [from env]
              aliases of del command: remove, uninstall
 
-  Show package(s) in an environment
+  Show packages
        petal show [options] [env]
              -d, --deep     show packages of base environments
              -v, --version  show package version
@@ -78,6 +78,18 @@ class Petal(ColorMaker):
     def py_version(self):
         return check_output([self.python, '-c',
             'import sys; v = sys.version_info; print(f"{v[0]}.{v[1]}")'])
+
+
+    @property
+    def default_env(self):
+        envs = [d for d in Path(os.getcwd()).iterdir()
+                if d.is_dir() and (d / 'pyvenv.cfg').exists()]
+        if not envs:
+            die('No env found!')
+        if len(envs) > 1:
+            env_str = ', '.join(self._y(tilde_path(x)) for x in envs)
+            die(f'Multiple envs found, you need to choose one from: {env_str}')
+        return PetalEnv(envs[0])
 
 
     def run(self):
@@ -129,7 +141,7 @@ class Petal(ColorMaker):
         deep = '-d' in opts or '--deep' in opts
 
         # find the env we're working on
-        env = PetalEnv(args[0]) if len(args) else default_env()
+        env = PetalEnv(args[0]) if len(args) else self.default_env
 
         def _pkg_line(p, level, sign='-'):
             prefix = '  ' * level
@@ -194,7 +206,7 @@ class Petal(ColorMaker):
             env = PetalEnv(args[-1])
             args = args[:-2]
         else:
-            env = default_env()
+            env = self.default_env
 
         # get requested packages from command line
         installed_pkgs = env.list_installed(deep=False)
@@ -243,7 +255,7 @@ class Petal(ColorMaker):
             env = PetalEnv(args[-1])
             args = args[:-2]
         else:
-            env = default_env()
+            env = self.default_env
 
         # installed packages set
         iset = PackageSet(env)
@@ -353,7 +365,7 @@ class Petal(ColorMaker):
             die(f'{path} uses python{env.py_version}, need {self.py_version}')
 
 
-    def env_new(self, path, layers=None, *, is_core=False):
+    def env_new(self, path, layers=[], *, is_core=False):
         "make a new petal environment"
 
         if not os.path.exists(self.python):
@@ -361,37 +373,47 @@ class Petal(ColorMaker):
         for layer in layers:
             self._ensure_layer(layer)
 
+        # calculate base layers' paths
         env = Path(path).expanduser()
+        based_on_core = False
         if not is_core:
             core = self.ensure_core()
             if not layers:
                 layers = [core]
+                based_on_core = True
             layers = [self.calc_layer_path(env, layer) for layer in layers]
+
+        # make PEP-405 virtual env
         make_dir(env / self.user_site)
         make_dir(env / 'bin')
         os.symlink(self.python, env / 'bin' / 'python')
-        with open(env / 'pyvenv.cfg', 'w+') as cfg:
-            cfg.write(f'home = {os.path.dirname(self.python)}\n')
-            cfg.write(f'include-system-site-packages = false\n')
-            cfg.write(f'version = {self.py_version}\n')
-            if is_core:
-                cfg.write(f'core = true\n')
+        write_file(env / 'pyvenv.cfg',
+                   [f'home = {os.path.dirname(self.python)}',
+                    f'include-system-site-packages = false'])
+
+        # bootstrap pip for core env
         if is_core:
             self.bootstrap_pip(os.path.realpath(env))
             log(f'petal core (python{self.py_version}) made: {self._y(path)}')
-        else:
-            msg = f'environment {self._y(path)} made'
-            if layers:
-                self.install_layers_hack(env)
-                msg += (' on top of [%s]' %
-                        ', '.join([self._y(layer) for layer in layers]))
-                msg += f' with {self._g(self.python)}'
-            write_file(env / 'petal.base', layers)
-            write_file(env / 'petal.pkgs')
-            write_file(env / 'petal.spec')
-            write_file(env / '.gitignore', ["*", ".gitignore", "!petal.base",
-                                            "!petal.pkgs", "!petal.spec"])
-            log(msg)
+            return
+
+        # write files for petal env
+        conf_layers = [] if based_on_core else layers
+        dump_json(env / 'petal.json', {'python': self.py_version,
+                                       'bases': conf_layers,
+                                       'require': []})
+        write_file(env / 'petal.freeze')
+        write_file(env / '.gitignore',
+                   ["*", "!.gitignore", "!petal.json", "!petal.freeze"])
+
+        msg = f'environment {self._y(path)} made'
+        if layers:
+            self.install_layers_hack(env)
+            msg += (' on top of [%s]' %
+                    ', '.join([self._y(layer) for layer in layers]))
+        msg += f' with {self._g(self.python)}'
+
+        log(msg)
 
 
     def env_build(self, path):
@@ -432,47 +454,41 @@ class Petal(ColorMaker):
                    "import sys; __import__('_petal_layers').scan_layers()")
         write_file(site / '_petal_layers.py', """
 ############################ petal layered env hack ############################
-import sys, os; from pathlib import Path; from contextlib import suppress
-envs = set()
-class EnvLayer:
-    def __init__(self, root, name):
-        # print(root)
-        self.is_core = False
-        if str(root) in envs:
-            self.root = None
-        else:
-            self.root, self.name = root, name
-            envs.add(str(self.root))
-    def add_path(self):
-        if not self.root:
-            return
+import sys, os, json; from pathlib import Path; from contextlib import suppress
+envs = set() # mutual inclusion prevention
+def scan_layers(root=None):
+    global envs
+    if root is None:
+        scan_layers(Path(__file__).parent.parent.parent.parent)
+        envs = set()
+        return
+    if root in envs:
+        return
+    envs.add(str(root))
+    with suppress(Exception):
+        json_conf = root / 'petal.json'
+        not_core = json_conf.exists()
         layers = []
-        with suppress(Exception):
-            with open(self.root / 'pyvenv.cfg') as cfg:
-                for line in [x.strip() for x in cfg]:
-                    if line.startswith('#'):
-                        continue
-                    key, val = [x.strip() for x in line.split('=')]
-                    if key == 'core' and val.lower() == 'true':
-                        self.is_core = True
-        if not self.is_core:
-            with suppress(Exception):
-                with open(self.root / 'petal.base') as base:
-                    for d in [x.strip() for x in base]:
-                        layer = d[0] in ['/', '~'] and Path(d) or self.root / d
-                        layer = layer.expanduser().resolve()
-                        if layer.is_dir(): layers.append(layer)
-        if not self.is_core or 'PETAL_USE_CORE' in os.environ:
-            site_path = self.root / 'lib' / self.name / 'site-packages'
+        py_version = '.'.join(str(v) for v in sys.version_info[:2])
+        libdir = f'python{py_version}'
+        if not_core:
+            with open(json_conf) as f:
+                conf = json.load(f)
+            if 'python' not in conf or conf['python'] != py_version:
+                return
+            bases = conf['bases'] or [f'~/.cache/petal.py/core/{libdir}']
+            for d in bases:
+                layer = d[0] in ['/', '~'] and Path(d) or root / d
+                layer = layer.expanduser().resolve()
+                if layer.is_dir():
+                    layers.append(layer)
+        if not_core or 'PETAL_USE_CORE' in os.environ:
+            site_path = root / 'lib' / libdir / 'site-packages'
             if site_path.is_dir():
                 path = str(site_path)
                 if path not in sys.path:
                     sys.path.append(path)
-        with suppress(Exception):
-            for layer in layers: EnvLayer(layer, self.name).add_path()
-def scan_layers():
-    py_dir = Path(__file__).parent.parent
-    EnvLayer(py_dir.parent.parent, py_dir.name).add_path(); envs = set()
+        for layer in layers: scan_layers(layer)
 ################################################################################
 """)
 
@@ -539,37 +555,39 @@ class PetalEnv(ColorMaker):
     def __init__(self, path):
         super().__init__()
         self.path = Path(path).expanduser().resolve()
-        env_cfg = self.path / 'pyvenv.cfg'
-        if not env_cfg.is_file():
+        if not (self.path / 'pyvenv.cfg').is_file():
             die(f'invalid env {path}')
-        self.is_core = False
+        env_cfg = self.path / 'petal.json'
+        self.cfg = {}
+        self.is_core = not env_cfg.exists()
         self.bases = []
-        self.py_version = None
-        with open(env_cfg) as cfg:
-            for line in cfg.readlines():
-                line = line.strip()
-                if line.startswith('#'):
-                    continue
-                key, val = [x.strip() for x in line.split('=')]
-                if key == 'core' and val.lower() == 'true':
-                    self.is_core = True
-                    self.bases = []
-                    break
-                if key == 'version':
-                    self.py_version = val
+        if self.is_core:
+            self.py_version = grep(r'^python(\d.+)$', self.path.name)
+            self.require = {}
+            return
+        with open(env_cfg) as f:
+            self.cfg = json.load(f)
+        self.py_version = self.cfg['python']
+        self.require = self.cfg['require']
         with suppress(Exception):
-            with open(self.get_file('base')) as base:
-                for d in [x.strip() for x in base]:
-                    layer = d[0] in ['/', '~'] and Path(d) or self.path / d
-                    layer = layer.expanduser().resolve()
-                    if layer.is_dir():
-                        self.bases.append(layer)
-        if self.py_version is None:
-            die(f'Python version not found in {env_cfg}')
+            bases = self.cfg['bases']
+            if not bases:
+                bases = [f'~/.cache/petal.py/core/python{self.py_version}']
+            for d in bases:
+                layer = d[0] in ['/', '~'] and Path(d) or self.path / d
+                layer = layer.expanduser().resolve()
+                if layer.is_dir():
+                    self.bases.append(layer)
 
 
-    def get_file(self, suffix):
-        return self.path / f'petal.{suffix}'
+    @property
+    def conf_file(self):
+        return self.path / f'petal.json'
+
+
+    @property
+    def freeze_file(self):
+        return self.path / f'petal.freeze'
 
 
     @property
@@ -598,10 +616,7 @@ class PetalEnv(ColorMaker):
 
     def explicit_packages(self, deep=False):
         "Explicit packages"
-        pkgs = []
-        with suppress(Exception):
-            with open(self.get_file('pkgs')) as f:
-                pkgs = [line.strip() for line in f]
+        pkgs = self.require
         if deep:
             for layer in self.layers:
                 pkgs += layer.explicit_packages(deep=True)
@@ -698,8 +713,7 @@ class PetalEnv(ColorMaker):
 
         # cache the result
         cache[pip_ver] = spec
-        with open(cache_fname, 'w+') as f:
-            json.dump(cache, f, indent=2)
+        dump_json(cache_fname, cache)
 
         return spec
 
@@ -720,12 +734,12 @@ class PetalEnv(ColorMaker):
         if not isinstance(pkg_specs, list):
             self.add([pkg_specs], freeze=freeze)
             return
-        specs = {pkg_name(p): p for p in read_packages(self.get_file('pkgs'))}
+        specs = {pkg_name(p): p for p in self.require}
         for p in pkg_specs:
             specs[pkg_name(p)] = p
-        pkgs = sorted(list(specs.values()))
-        if pkgs:
-            write_file(self.get_file('pkgs'), '\n'.join(pkgs))
+        self.require = sorted(list(specs.values()))
+        self.cfg['require'] = self.require
+        dump_json(self.conf_file, self.cfg)
         if freeze:
             self.freeze()
 
@@ -735,9 +749,10 @@ class PetalEnv(ColorMaker):
             self.remove([pkg_specs], freeze=freeze)
             return
         dels = set(pkg_name(p) for p in pkg_specs)
-        specs = {pkg_name(p): p for p in read_packages(self.get_file('pkgs'))}
-        pkgs = sorted([specs[p] for p in specs if p not in dels])
-        write_file(self.get_file('pkgs'), '\n'.join(pkgs))
+        specs = {pkg_name(p): p for p in self.require}
+        self.require = sorted([specs[p] for p in specs if p not in dels])
+        self.cfg['require'] = self.require
+        dump_json(self.conf_file, self.cfg)
         if freeze:
             self.freeze()
 
@@ -745,7 +760,7 @@ class PetalEnv(ColorMaker):
     def freeze(self, deep=False):
         pkgs = [f'{p.name}=={p.version}'
                 for p in self.list_installed(deep=deep)]
-        write_file(self.get_file('spec'), pkgs)
+        write_file(self.freeze_file, pkgs)
 
 
     def __str__(self):
@@ -799,6 +814,8 @@ def download_url(url, filename=None, *, timeout=10):
 
 def write_file(fname, content=None):
     if isinstance(content, list):
+        if content and not content[-1]:
+            content = content[:-1]
         write_file(fname, '\n'.join(content))
         return
     with open(fname, 'w+') as f:
@@ -807,29 +824,16 @@ def write_file(fname, content=None):
             f.write('\n')
 
 
-def read_packages(fname):
-    try:
-        with open(fname) as f:
-            return [line for line in [x.strip() for x in f.readlines()]
-                    if not line.startswith('#')]
-    except:
-        return []
+def dump_json(fname, obj, indent=2):
+    with open(fname, 'w+') as f:
+        json.dump(obj, f, indent=indent)
+        f.write('\n')
 
 
 def log(*msg):
     line = ''.join([str(x) for x in msg])
     if line:
         print(line)
-
-
-def default_env():
-    envs = [d for d in Path(os.getcwd()).iterdir()
-            if d.is_dir() and (d / 'pyvenv.cfg').exists()]
-    if not envs:
-        die('No env found!')
-    if len(envs) > 1:
-        die('Multiple envs found, you need to choose one explicitly')
-    return PetalEnv(envs[0])
 
 
 def os_run(cmd, **env):
