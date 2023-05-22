@@ -576,7 +576,7 @@ class XPackage:
 
     def __init__(self, spec, src=None):
         self._spec = spec
-        self.src = src
+        self.src = str(src) if src else None
 
 
     @property
@@ -595,24 +595,25 @@ class XRequired:
     def __init__(self, specs=[], src=None):
         self.lines = []
         self.pkgs = {}
-        self._src = src if src is None else str(src)
+        self.src = src if src else None
+        self.pwd = self.src if src else Path(os.getcwd())
         for spec in specs:
             if not isinstance(spec, str) or not spec:
                 continue
             if is_include(spec):
-                include = Path(spec)
+                include = self.pwd / Path(spec)
                 if not include.exists():
                     continue
-                inc = XRequired(read_lines(include), src=include)
+                inc = XRequired(read_lines(include), src=spec)
                 for name, xpkg in inc.pkgs.items():
                     self.pkgs[name] = xpkg
-                line = str(include)
+                line = spec
                 if not line.startswith('.'):
                     line = tilde_path(include.resolve())
                 self.lines.append(line)
             else:
                 self.lines.append(spec)
-                self.pkgs[pkg_name(spec)] = XPackage(spec, self._src)
+                self.pkgs[pkg_name(spec)] = XPackage(spec, self.src)
 
 
     def __bool__(self):
