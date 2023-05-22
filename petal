@@ -29,12 +29,12 @@ def die_usage():
              alias of add command: install
 
   Remove packages
-       petal del [pip uninstall params ...] [from env]
+       petal del package ... [from env]
              aliases of del command: remove, uninstall
 
   Show packages
        petal show [options] [env]
-             -d, --deep     show packages of base environments
+             -d, --deep     show packages in base environment(s)
              -v, --version  show package version
 
   Print action plans
@@ -139,6 +139,7 @@ class Petal(ColorMaker):
         args = [x for x in args if not x.startswith('-')]
         show_version = '-v' in opts or '--version' in opts
         deep = '-d' in opts or '--deep' in opts
+        show_src = '-s' in opts or '--source' in opts
 
         # find the env we're working on
         env = PetalEnv(args[0]) if len(args) else self.default_env
@@ -160,19 +161,25 @@ class Petal(ColorMaker):
 
         pkgs = PackageSet(env)
         print(f'packages in {self._y(env)}:')
-        for spec in explicits:
-            name = pkg_name(spec)
+        for xpkg in explicits:
+            name = xpkg.name
             pkg = pkgs[name]
             line = (pkg.native and '+ ' or '* ') + self._g(name)
             if show_version:
                 line += f' {self._b(pkg.version)}'
             if not pkg.native:
                 line += f' [{tilde_path(pkg.env)}]'
+            if show_src:
+                if not xpkg.src:
+                    src = '(manual)'
+                else:
+                    src = f'(included from {tilde_path(xpkg.src)})'
+                line += f' {self._c(src)}'
             print(line)
             for p, level in pkgs.walk(name):
                 print(_pkg_line(p, level))
 
-        explicit_names = set(pkg_name(p) for p in explicits)
+        explicit_names = set(p.name for p in explicits)
         orphans = [p for p in pkgs.orphans()
                    if p.native and p.name not in explicit_names]
         if orphans:
@@ -211,20 +218,18 @@ class Petal(ColorMaker):
         # get requested packages from command line
         installed_pkgs = env.list_installed(deep=False)
         installed = set(pkg.name for pkg in installed_pkgs)
-        install_opts, wanted_specs = env.split_install_args(args)
-        if not wanted_specs:
+        pip_opts, wanted_specs = env.split_install_args(args)
+        wanted = XRequired(wanted_specs)
+        if not wanted:
             die('no package to install')
 
-        pip_dryrun = '--dry-run' in install_opts
-
         # filter out installed packages with version specs removed
-        wanted_pkgs = {pkg_name(p): p for p in wanted_specs}
-        new_packages = [p for p in wanted_pkgs if p not in installed]
+        new = [p for p in wanted.names if p not in installed]
 
         # handle promotion: package installed but not in the explicit set
-        if not new_packages:
-            explicits = set(pkg_name(p) for p in env.explicit_packages())
-            selected = [p for p in wanted_pkgs if p not in explicits]
+        if not new:
+            explicits = set(p.name for p in env.explicit_packages())
+            selected = [p for p in wanted.names if p not in explicits]
             if selected:
                 if dryrun:
                     log(f'[{env}] plan to promote {self._pstr(selected)}')
@@ -236,15 +241,15 @@ class Petal(ColorMaker):
             return
 
         # run pip to install packages
-        install_pkgs = sorted([wanted_pkgs[p] for p in new_packages])
-        pip_cmd = env.pip('install', install_opts + install_pkgs)
+        install_specs = wanted.filter(new).specs
+        pip_cmd = env.pip('install', pip_opts + install_specs)
         self._run_pip(pip_cmd, dry=dryrun)
         if dryrun:
             return
 
-        if not pip_dryrun:
-            env.add(install_pkgs)
-            log(f'[{env}] packages installed: {self._pstr(install_pkgs)}')
+        if '--dry-run' not in pip_opts:
+            env.add(wanted.lines)
+            log(f'[{env}] packages installed: {self._pstr(install_specs)}')
 
 
     def cmd_del(self, args, dryrun=False):
@@ -259,7 +264,9 @@ class Petal(ColorMaker):
 
         # installed packages set
         iset = PackageSet(env)
-        explicits = set(pkg_name(p) for p in env.explicit_packages())
+        explicits = env.explicit_packages()
+        installed = set(p.name for p in explicits if p.src is None)
+        excludes  = set(p.name for p in explicits if p.src is not None)
 
         # find collateral packages (dependencies) to remove
         wanted = [p.lower() for p in args]
@@ -267,6 +274,15 @@ class Petal(ColorMaker):
         if unknwon:
             warn = self._r('unknown packages')
             die(f'[{env}] {warn}: {self._pstr(unknwon)}')
+
+        # prevent removing packages from include entries
+        excluded = [p for p in explicits
+                    if p.src is not None and p.name in wanted]
+        if excluded:
+            log('NOT removing included packages:')
+            for xpkg in excluded:
+                log(f'  {self._g(xpkg.name)}: {self._c(xpkg.src)}')
+        wanted = [p for p in wanted if p not in excludes]
 
         # allow delisting packages without uninstalling them
         wanted_set = set(wanted)
@@ -285,10 +301,10 @@ class Petal(ColorMaker):
                        # native (never remove packages in base envs), and
                        if p.native and
                        # not in explicit set, and
-                       p.name not in explicits and
+                       p.name not in installed and
                        # not needed by any other packages except those on the list
                        not set(iset.dep_by(p.name)) - removing]
-            cmd = env.pip('uninstall', ['-q', '-y'] + uninstall + orphans)
+            cmd = env.pip('uninstall', ['--yes'] + uninstall + orphans)
             if not dryrun:
                 self._run_pip(cmd)
                 msg += f'[{env}] uninstalled: {self._pstr(uninstall)}'
@@ -297,7 +313,7 @@ class Petal(ColorMaker):
             if orphans:
                 msg += f', with dependencies: {self._pstr(orphans)}'
 
-        real_delist = [p for p in delist if p in explicits]
+        real_delist = [p for p in delist if p in installed]
         if real_delist:
             delist = real_delist
             if msg:
@@ -494,6 +510,8 @@ def scan_layers(root=None):
 
 
 class Package:
+    "Abstraction of single package"
+
     def __init__(self, pkg):
         self.disp = pkg.project_name
         self.name = self.disp.lower()
@@ -510,6 +528,8 @@ class Package:
 
 
 class PackageSet:
+    "A set of packages with dependency traversing"
+
     def __init__(self, env, deep=True):
         self.pkgs = {p.name: p for p in env.list_installed(deep=deep)}
         # resolve dependency network
@@ -551,7 +571,79 @@ class PackageSet:
         return sorted([pkg for pkg in self.pkgs.values() if not pkg.depby])
 
 
+class XPackage:
+    "Explicit package: package with explicit source"
+
+    def __init__(self, spec, src=None):
+        self._spec = spec
+        self.src = src
+
+
+    @property
+    def name(self):
+        return pkg_name(self._spec)
+
+
+    @property
+    def spec(self):
+        return self._spec
+
+
+class XRequired:
+    "Explicitly required packages"
+
+    def __init__(self, specs=[], src=None):
+        self.lines = []
+        self.pkgs = {}
+        self._src = src if src is None else str(src)
+        for spec in specs:
+            if not isinstance(spec, str) or not spec:
+                continue
+            if is_include(spec):
+                include = Path(spec)
+                if not include.exists():
+                    continue
+                inc = XRequired(read_lines(include), src=include)
+                for name, xpkg in inc.pkgs.items():
+                    self.pkgs[name] = xpkg
+                line = str(include)
+                if not line.startswith('.'):
+                    line = tilde_path(include.resolve())
+                self.lines.append(line)
+            else:
+                self.lines.append(spec)
+                self.pkgs[pkg_name(spec)] = XPackage(spec, self._src)
+
+
+    def __bool__(self):
+        return bool(self.pkgs)
+
+
+    @property
+    def names(self):
+        return list(self.pkgs.keys())
+
+
+    @property
+    def specs(self):
+        return [x.spec for x in self.pkgs.values()]
+
+
+    @property
+    def full(self):
+        return list(self.pkgs.values())
+
+
+    def filter(self, names):
+        self.lines = [line for line in self.lines
+                      if is_include(line) or pkg_name(line) in names]
+        self.pkgs = {k: v for k, v in self.pkgs.items() if k in names}
+        return self
+
+
 class PetalEnv(ColorMaker):
+    "Abstraction of Petal Environment"
+
     def __init__(self, path):
         super().__init__()
         self.path = Path(path).expanduser().resolve()
@@ -563,12 +655,12 @@ class PetalEnv(ColorMaker):
         self.bases = []
         if self.is_core:
             self.py_version = grep(r'^python(\d.+)$', self.path.name)
-            self.require = {}
+            self.require = XRequired()
             return
         with open(env_cfg) as f:
             self.cfg = json.load(f)
         self.py_version = self.cfg['python']
-        self.require = self.cfg['require']
+        self.require = XRequired(self.cfg['require'])
         with suppress(Exception):
             bases = self.cfg['bases']
             if not bases:
@@ -616,11 +708,11 @@ class PetalEnv(ColorMaker):
 
     def explicit_packages(self, deep=False):
         "Explicit packages"
-        pkgs = self.require
+        pkgs = self.require.full
         if deep:
             for layer in self.layers:
                 pkgs += layer.explicit_packages(deep=True)
-        return sorted(pkgs)
+        return pkgs
 
 
     def paths(self, include_core=True):
@@ -636,7 +728,10 @@ class PetalEnv(ColorMaker):
 
     def pip(self, cmd, args):
         "Return pip command line as a string list"
-        ret = [str(self.path / 'bin' / 'python'), '-m' , 'pip', cmd]
+
+        python = str(self.path / 'bin' / 'python')
+        global_opts = ['--disable-pip-version-check', '--no-input']
+        ret = [python, '-m' , 'pip'] + global_opts + [cmd]
         if isinstance(args, list):
             ret += args
         else:
@@ -686,7 +781,7 @@ class PetalEnv(ColorMaker):
 
 
     # We need to extract package names from command line, but in theory all pip
-    # install options should be supported.  The solution we use is to extract
+    # install options should be supported.  The solution we adopt is to extract
     # and cache command line switches from `pip install --help` and use those
     # to filter out options.
     def _get_install_spec(self):
@@ -705,10 +800,10 @@ class PetalEnv(ColorMaker):
 
         spec = []
         pip_cmd = self.core.pip('install', '--help')
-        for line in check_output(pip_cmd).split('\n'):
+        for x in check_output(pip_cmd).split('\n'):
             # this regexp filters out all options with argument
-            if re.match('^\s{2,4}-[^ ].+\s+<[^ ]+>', line):
-                spec += [x for x in line.split() if x.startswith('-')]
+            if re.match('^\s{2,4}-[^ ].+\s+<[^ ]+>', x):
+                spec += [c.strip(',') for c in x.split() if c.startswith('-')]
         spec = sorted(spec)
 
         # cache the result
@@ -734,14 +829,10 @@ class PetalEnv(ColorMaker):
         if not isinstance(pkg_specs, list):
             self.add([pkg_specs], freeze=freeze)
             return
-        specs = {pkg_name(p): p for p in self.require}
+        specs = {name: pkg.spec for name, pkg in self.require.pkgs.items()}
         for p in pkg_specs:
-            specs[pkg_name(p)] = p
-        self.require = sorted(list(specs.values()))
-        self.cfg['require'] = self.require
-        dump_json(self.conf_file, self.cfg)
-        if freeze:
-            self.freeze()
+            specs[is_include(p) and p or pkg_name(p)] = p
+        self.update_require(list(specs.values()), freeze)
 
 
     def remove(self, pkg_specs, freeze=True):
@@ -749,9 +840,13 @@ class PetalEnv(ColorMaker):
             self.remove([pkg_specs], freeze=freeze)
             return
         dels = set(pkg_name(p) for p in pkg_specs)
-        specs = {pkg_name(p): p for p in self.require}
-        self.require = sorted([specs[p] for p in specs if p not in dels])
-        self.cfg['require'] = self.require
+        specs = {name: pkg.spec for name, pkg in self.require.pkgs.items()}
+        self.update_require([specs[p] for p in specs if p not in dels])
+
+
+    def update_require(self, req, freeze=True):
+        self.cfg['require'] = req
+        self.require = XRequired(req)
         dump_json(self.conf_file, self.cfg)
         if freeze:
             self.freeze()
@@ -824,6 +919,20 @@ def write_file(fname, content=None):
             f.write('\n')
 
 
+def read_lines(fname):
+    "Read lines in file, remove Python comments and empty lines"
+
+    lines = []
+    with suppress(Exception):
+        with open(fname) as f:
+            for line in f:
+                line = line.strip()
+                if not line or re.match(r'^\s*#', line):
+                    continue
+                lines.append(line)
+    return lines
+
+
 def dump_json(fname, obj, indent=2):
     with open(fname, 'w+') as f:
         json.dump(obj, f, indent=indent)
@@ -846,6 +955,10 @@ def os_run(cmd, **env):
         return subprocess.call(cmd, env=env_vars)
     else:
         return subprocess.call(cmd)
+
+
+def is_include(path):
+    return re.match(r'^[~/.]', str(path)) is not None
 
 
 def tilde_path(path):
