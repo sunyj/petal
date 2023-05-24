@@ -36,6 +36,7 @@ def die_usage():
        petal show [options] [env]
              -d, --deep     show packages in base environment(s)
              -v, --version  show package version
+             -s, --source   show package source
 
   Print action plans
        petal plan add | del ... [on env]
@@ -130,6 +131,13 @@ class Petal(ColorMaker):
             if len(args) > 1:
                 die_usage()
             self.env_build(env_dir)
+
+
+    def cmd_rebuild(self, args):
+        if len(args) != 1:
+            die_usage()
+        env = PetalEnv(args[0])
+        print(env.require.pkgs)
 
 
     def cmd_show(self, args):
@@ -433,6 +441,7 @@ class Petal(ColorMaker):
 
 
     def env_build(self, path):
+        print('build', path)
         ...
 
 
@@ -589,6 +598,15 @@ class XPackage:
         return self._spec
 
 
+    def __str__(self):
+        spec = self._spec
+        if self.src:
+            spec += f' (from {str(self.src)})'
+        return spec
+
+    def __repr__(self): return str(self)
+
+
 class XRequired:
     "Explicitly required packages"
 
@@ -596,7 +614,8 @@ class XRequired:
         self.lines = []
         self.pkgs = {}
         self.src = src if src else None
-        self.pwd = self.src if src else Path(os.getcwd())
+        cwd = Path(os.getcwd())
+        self.pwd = (Path(src).parent if src else cwd).resolve()
         for spec in specs:
             if not isinstance(spec, str) or not spec:
                 continue
@@ -604,7 +623,8 @@ class XRequired:
                 include = self.pwd / Path(spec)
                 if not include.exists():
                     continue
-                inc = XRequired(read_lines(include), src=spec)
+                relpath = os.path.relpath(include.resolve(), cwd)
+                inc = XRequired(read_lines(include), src=relpath)
                 for name, xpkg in inc.pkgs.items():
                     self.pkgs[name] = xpkg
                 line = spec
