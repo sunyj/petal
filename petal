@@ -21,27 +21,30 @@ INSTALL_SPEC_CACHE = 'install-command-spec.json'
 
 def die_usage():
     print("""Usage: petal <command> [args ...]\n
-  Create or recover an environment
+  Create or recover environments
        petal make [env] [with /usr/bin/python3] [over|on base_env ...]
 
-  Rebuild environment (from scratch)
+  Rebuild or clean environments
        petal rebuild [options] env
              -c, --clean     clean the env only
              -s, --scratch   rebuild from scrach, implies --clean
 
+  Inspect environments
+       petal show [options] [env]
+             -d, --deep     show packages in base environment(s)
+             -v, --version  show package version
+             -s, --source   show package source
+
   Install packages
-       petal add [pip install params ...] [to env]
+       petal add <pip install params ...> [to env]
              alias of add command: install
 
   Remove packages
        petal del package ... [from env]
              aliases of del command: remove, uninstall
 
-  Show packages
-       petal show [options] [env]
-             -d, --deep     show packages in base environment(s)
-             -v, --version  show package version
-             -s, --source   show package source
+  Upgrade packages
+       petal upgrade <package ... | all | pip> [in env]
 
   Print action plans
        petal plan add | del ... [on env]
@@ -128,7 +131,11 @@ class Petal(ColorMaker):
     def cmd_make(self, args):
         if args:
             args = self._get_python(args)
-        env_dir = args[0] if args else 'env'
+        if args:
+            env_dir = args[0]
+            args = args[1:]
+        else:
+            env_dir = 'env'
         if not os.path.exists(env_dir):
             if len(args) > 1 and args[0] in ['over', 'on']:
                 layers = args[1:]
@@ -379,6 +386,34 @@ class Petal(ColorMaker):
             log('nothing to change')
 
 
+    def cmd_upgrade(self, args, dryrun=False):
+        "Upgrade packages"
+
+        # find the env we're working on
+        if len(args) > 2 and args[-2] == 'in':
+            env = PetalEnv(args[-1])
+            args = args[:-2]
+        else:
+            env = self.default_env
+
+        specs = args
+        if specs == ['pip']:
+            pip_cmd = env.core.pip('install', ['-U' , 'pip'])
+        else:
+            if not specs or specs == ['all']:
+                specs = env.require.specs
+            for s in specs:
+                specs = [env.require[s].spec for s in specs if s in env.require]
+            if not specs:
+                log('nothing to upgrade')
+                return
+            pip_cmd = env.pip('install', ['-U'] + specs)
+        self._run_pip(pip_cmd, dry=dryrun)
+
+        if not dryrun:
+            env.freeze()
+
+
     def cmd_plan(self, args):
         "Print action plans"
 
@@ -394,6 +429,10 @@ class Petal(ColorMaker):
             if len(args) > 2 and args[-2] == 'on':
                 args[-2] = 'from'
             self.cmd_del(args, dryrun=True)
+        elif cmd == 'upgrade':
+            if len(args) > 2 and args[-2] == 'in':
+                args[-2] = 'in'
+            self.cmd_upgrade(args, dryrun=True)
         else:
             die_usage()
 
@@ -666,6 +705,11 @@ class XPackage:
         return self._spec
 
 
+    @property
+    def native(self):
+        return not self.src
+
+
     def __str__(self):
         spec = self._spec
         if self.src:
@@ -708,6 +752,14 @@ class XRequired:
         return bool(self.pkgs)
 
 
+    def __contains__(self, pkg):
+        return pkg in self.pkgs
+
+
+    def __getitem__(self, pkg):
+        return self.pkgs[pkg]
+
+
     @property
     def names(self):
         return list(self.pkgs.keys())
@@ -716,6 +768,17 @@ class XRequired:
     @property
     def specs(self):
         return [x.spec for x in self.pkgs.values()]
+
+
+    @property
+    def lut(self):
+        lut = {}
+        for name, pkg in self.pkgs.items():
+            if pkg.native:
+                lut[name] = pkg.spec
+            else:
+                lut[pkg.src] = pkg.src
+        return lut
 
 
     @property
@@ -918,7 +981,7 @@ class PetalEnv(ColorMaker):
         if not isinstance(pkg_specs, list):
             self.add([pkg_specs], freeze=freeze)
             return
-        specs = {name: pkg.spec for name, pkg in self.require.pkgs.items()}
+        specs = self.require.lut
         for p in pkg_specs:
             specs[is_include(p) and p or pkg_name(p)] = p
         self.update_require(list(specs.values()), freeze)
@@ -929,8 +992,8 @@ class PetalEnv(ColorMaker):
             self.remove([pkg_specs], freeze=freeze)
             return
         dels = set(pkg_name(p) for p in pkg_specs)
-        specs = {name: pkg.spec for name, pkg in self.require.pkgs.items()}
-        self.update_require([specs[p] for p in specs if p not in dels])
+        lut = self.require.lut
+        self.update_require([lut[p] for p in lut if p not in dels])
 
 
     def update_require(self, req, freeze=True):
