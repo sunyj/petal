@@ -228,7 +228,7 @@ class Petal(ColorMaker):
                 line += f' [{tilde_path(pkg.env)}]'
             if show_src:
                 if not xpkg.src:
-                    src = '(manual)'
+                    src = '(added)'
                 else:
                     src = f'(included from {tilde_path(xpkg.src)})'
                 line += f' {self._c(src)}'
@@ -753,14 +753,17 @@ class XRequired:
                 relpath = os.path.relpath(include.resolve(), cwd)
                 inc = XRequired(read_lines(include), src=relpath)
                 for name, xpkg in inc.pkgs.items():
-                    self.pkgs[name] = xpkg
+                    if name not in self.pkgs:
+                        self.pkgs[name] = xpkg
                 line = spec
                 if not line.startswith('.'):
                     line = tilde_path(include.resolve())
                 self.lines.append(line)
             else:
                 self.lines.append(spec)
-                self.pkgs[pkg_name(spec)] = XPackage(spec, self.src)
+                name = pkg_name(spec)
+                if name not in self.pkgs:
+                    self.pkgs[name] = XPackage(spec, self.src)
 
 
     def __bool__(self):
