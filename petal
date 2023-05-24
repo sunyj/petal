@@ -114,6 +114,8 @@ class Petal(ColorMaker):
 
 
     def _get_python(self, args):
+        "Parse with clause for python executable, return remaining args."
+
         if not args or 'with' not in args:
             return args
         idx = args.index('with') + 1
@@ -129,6 +131,8 @@ class Petal(ColorMaker):
 
 
     def cmd_make(self, args):
+        "Make or recover env."
+
         if args:
             args = self._get_python(args)
         if args:
@@ -151,7 +155,7 @@ class Petal(ColorMaker):
 
 
     def cmd_rebuild(self, args):
-        "Rebuild env"
+        "Rebuild env."
 
         opts = [x for x in args if x.startswith('-')]
         args = [x for x in args if not x.startswith('-')]
@@ -183,7 +187,7 @@ class Petal(ColorMaker):
 
 
     def cmd_show(self, args):
-        "Remove pakcages from env"
+        "Remove pakcages from env."
 
         opts = [x for x in args if x.startswith('-')]
         args = [x for x in args if not x.startswith('-')]
@@ -239,7 +243,8 @@ class Petal(ColorMaker):
 
 
     def _pstr(self, pkgs):
-        "Package display helper"
+        "Package display helper."
+
         if isinstance(pkgs, Iterable):
             return ', '.join(self._g(p) for p in pkgs)
         return self._g(kgs)
@@ -256,7 +261,7 @@ class Petal(ColorMaker):
 
 
     def cmd_add(self, args, dryrun=False):
-        "Install pakcages to env"
+        "Install pakcages to env."
 
         # find the env we're working on
         if len(args) > 2 and args[-2] == 'to':
@@ -303,7 +308,7 @@ class Petal(ColorMaker):
 
 
     def cmd_del(self, args, dryrun=False):
-        "Remove pakcages from env"
+        "Remove pakcages from env."
 
         # find the env we're working on
         if len(args) > 2 and args[-2] == 'from':
@@ -387,7 +392,7 @@ class Petal(ColorMaker):
 
 
     def cmd_upgrade(self, args, dryrun=False):
-        "Upgrade packages"
+        "Upgrade packages."
 
         # find the env we're working on
         if len(args) > 2 and args[-2] == 'in':
@@ -415,7 +420,7 @@ class Petal(ColorMaker):
 
 
     def cmd_plan(self, args):
-        "Print action plans"
+        "Print action plans."
 
         if len(args) < 2:
             die_usage()
@@ -437,34 +442,8 @@ class Petal(ColorMaker):
             die_usage()
 
 
-    def ensure_core(self):
-        env = f'~/.cache/petal.py/core/python{self.py_version}'
-        if Path(env).expanduser().exists():
-            return env
-
-        error = None
-        try:
-            self.env_new(env, is_core=True)
-        except Exception as e:
-            shutil.rmtree(env, ignore_errors=True)
-            error = e
-        if error:
-            raise Error
-
-        return env
-
-
-    def _ensure_layer(self, layer):
-        if not os.path.exists(layer):
-            die(f'layer {layer} not found')
-        env = PetalEnv(layer)
-        if env.py_version != self.py_version:
-            path = tilde_path(os.path.realpath(layer))
-            die(f'{path} uses python{env.py_version}, need {self.py_version}')
-
-
     def env_new(self, path, layers=[], *, is_core=False):
-        "make a new petal environment"
+        "Make a new petal environment."
 
         if not os.path.exists(self.python):
             die(f'{self.python} not found')
@@ -475,7 +454,7 @@ class Petal(ColorMaker):
         env = Path(path).expanduser()
         based_on_core = False
         if not is_core:
-            core = self.ensure_core()
+            core = self._ensure_core()
             if not layers:
                 layers = [core]
                 based_on_core = True
@@ -510,6 +489,8 @@ class Petal(ColorMaker):
 
 
     def env_build(self, path, *, with_packages=True):
+        "Build a petal environment."
+
         env = Path(path)
         if not env.is_dir():
             die(f'{path} is not a directory')
@@ -536,8 +517,36 @@ class Petal(ColorMaker):
             self._run_pip(PetalEnv(env).pip('install', ['-r', freeze_file]))
 
 
+    def _ensure_core(self):
+        "Return core env.  Make it if necessary."
+
+        env = f'~/.cache/petal.py/core/python{self.py_version}'
+        if Path(env).expanduser().exists():
+            return env
+
+        error = None
+        try:
+            self.env_new(env, is_core=True)
+        except Exception as e:
+            shutil.rmtree(env, ignore_errors=True)
+            error = e
+        if error:
+            raise Error
+
+        return env
+
+
+    def _ensure_layer(self, layer):
+        if not os.path.exists(layer):
+            die(f'layer {layer} not found')
+        env = PetalEnv(layer)
+        if env.py_version != self.py_version:
+            path = tilde_path(os.path.realpath(layer))
+            die(f'{path} uses python{env.py_version}, need {self.py_version}')
+
+
     def create_pep405(self, env):
-        "make PEP-405 virtual env"
+        "Make a bare PEP-405 virtual environment."
 
         for f in ['bin', 'lib', 'pyvenv.cfg']:
             if (env / f).exists():
@@ -553,6 +562,8 @@ class Petal(ColorMaker):
 
 
     def calc_layer_path(self, env, layer):
+        "Calculate relative path of base layer."
+
         if layer.startswith('~'):
             return layer
         if layer.startswith('/'):
@@ -626,7 +637,7 @@ def scan_layers(root=None):
 
 
 class Package:
-    "Abstraction of single package"
+    "Abstraction of single package."
 
     def __init__(self, pkg):
         self.disp = pkg.project_name
@@ -644,7 +655,7 @@ class Package:
 
 
 class PackageSet:
-    "A set of packages with dependency traversing"
+    "A set of packages with dependency traversing."
 
     def __init__(self, env, deep=True):
         self.pkgs = {p.name: p for p in env.list_installed(deep=deep)}
@@ -663,21 +674,21 @@ class PackageSet:
         return key.lower() in self.pkgs
 
     def walk(self, name, level=0):
-        "depth first recursive walk"
+        "Depth-first recursive walk."
         pkg = self.pkgs[name]
         for dep in pkg.depon:
             yield (self.pkgs[dep], level + 1)
             yield from self.walk(dep, level + 1)
 
     def dep_on(self, name):
-        "get all dependencies"
+        "Get all dependencies."
         pkg = self.pkgs[name]
         for dep in pkg.depon:
             yield self.pkgs[dep]
             yield from self.dep_on(dep)
 
     def dep_by(self, name):
-        "get all reverse dependencies"
+        "Get all reverse dependencies."
         pkg = self.pkgs[name]
         for dep in pkg.depby:
             yield self.pkgs[dep]
@@ -688,7 +699,7 @@ class PackageSet:
 
 
 class XPackage:
-    "Explicit package: package with explicit source"
+    "Explicit package: package with explicit source."
 
     def __init__(self, spec, src=None):
         self._spec = spec
@@ -720,7 +731,7 @@ class XPackage:
 
 
 class XRequired:
-    "Explicitly required packages"
+    "Explicitly required packages."
 
     def __init__(self, specs=[], src=None):
         self.lines = []
@@ -794,7 +805,7 @@ class XRequired:
 
 
 class PetalEnv(ColorMaker):
-    "Abstraction of Petal Environment"
+    "Abstraction of Petal Environment."
 
     def __init__(self, path):
         super().__init__()
@@ -836,14 +847,14 @@ class PetalEnv(ColorMaker):
 
     @property
     def layers(self):
-        "Iterate all direct base layers"
+        "Iterate all direct base layers."
         for p in self.bases:
             yield PetalEnv(p)
 
 
     @property
     def core(self):
-        "Find core env recursively"
+        "Find core env recursively."
         if self.is_core:
             return self
         for e in self.layers:
@@ -854,12 +865,13 @@ class PetalEnv(ColorMaker):
 
     @property
     def site_path(self):
-        "Site Path of this env"
+        "Site Path of this env."
         return self.path / 'lib' / f'python{self.py_version}' / 'site-packages'
 
 
     def explicit_packages(self, deep=False):
-        "Explicit packages"
+        "Explicit packages."
+
         pkgs = self.require.full
         if deep:
             for layer in self.layers:
@@ -868,7 +880,8 @@ class PetalEnv(ColorMaker):
 
 
     def paths(self, include_core=True):
-        "Site Paths of this env and all base envs"
+        "Site Paths of this env and all base envs."
+
         if include_core or not self.is_core:
             ret = [str(self.site_path)]
         else:
@@ -879,7 +892,7 @@ class PetalEnv(ColorMaker):
 
 
     def pip(self, cmd, args):
-        "Return pip command line as a string list"
+        "Return pip command line as a string list."
 
         python = str(self.path / 'bin' / 'python')
         global_opts = ['--disable-pip-version-check', '--no-input']
@@ -915,7 +928,7 @@ class PetalEnv(ColorMaker):
 
 
     def split_install_args(self, args):
-        "Split args into pip install options and package names"
+        "Split args into pip install options and package names."
         ins_spec = self._get_install_spec()
         idx = set()
         for i in range(len(args)):
@@ -937,7 +950,7 @@ class PetalEnv(ColorMaker):
     # and cache command line switches from `pip install --help` and use those
     # to filter out options.
     def _get_install_spec(self):
-        "Return pip install command-line spec of current version of pip"
+        "Return pip install command-line spec of current version of pip."
 
         cache_fname = self.core.path / INSTALL_SPEC_CACHE
         if not cache_fname.exists():
@@ -966,7 +979,8 @@ class PetalEnv(ColorMaker):
 
 
     def _get_pip_version(self):
-        "Look up pip version in core env"
+        "Look up pip version in core env."
+
         if self.core is None:
             die(f'core env not found for {self.path}')
         for d in self.core.site_path.iterdir():
@@ -1072,7 +1086,7 @@ def write_file(fname, content=None):
 
 
 def read_lines(fname):
-    "Read lines in file, remove Python comments and empty lines"
+    "Read lines in file, remove Python comments and empty lines."
 
     lines = []
     with suppress(Exception):
