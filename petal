@@ -20,34 +20,36 @@ INSTALL_SPEC_CACHE = 'install-command-spec.json'
 
 
 def die_usage():
-    print("""Usage: petal <command> [args ...]\n
-  Create or recover environments
+    print("""
+Usage: petal <command> [args ...]\n
+    Create or recover environments
        petal make [env] [with /usr/bin/python3] [over|on base_env ...]
 
-  Rebuild or clean environments
+    Rebuild or clean environments
        petal rebuild [options] env
              -c, --clean     clean the env only
              -s, --scratch   rebuild from scrach, implies --clean
 
-  Inspect environments
+    Inspect environments
        petal show [options] [env]
-             -d, --deep     show packages in base environment(s)
-             -v, --version  show package version
-             -s, --source   show package source
+             -d, --deep      show packages in base environment(s)
+             -v, --version   show package version
+             -s, --source    show package source
+             -x, --explicit  show explicit packages only
 
-  Install packages
+    Install packages
        petal add <pip install params ...> [to env]
              alias of add command: install
 
-  Remove packages
+    Remove packages
        petal del package ... [from env]
              aliases of del command: remove, uninstall
 
-  Upgrade packages
+    Upgrade packages
        petal upgrade <package ... | all | pip> [in env]
 
-  Print action plans
-       petal plan add | del ... [on env]
+    Print action plans
+       petal plan add | del | upgrade ... [on env]
 """.strip())
 
     sys.exit(1)
@@ -194,6 +196,7 @@ class Petal(ColorMaker):
         show_version = '-v' in opts or '--version' in opts
         deep = '-d' in opts or '--deep' in opts
         show_src = '-s' in opts or '--source' in opts
+        explicit_only = '-x' in opts or '--explicit' in opts
 
         # find the env we're working on
         env = PetalEnv(args[0]) if len(args) else self.default_env
@@ -218,7 +221,7 @@ class Petal(ColorMaker):
         for xpkg in explicits:
             name = xpkg.name
             pkg = pkgs[name]
-            line = (pkg.native and '+ ' or '* ') + self._g(name)
+            line = (pkg.native and '+ ' or '* ') + self._g(xpkg.spec)
             if show_version:
                 line += f' {self._b(pkg.version)}'
             if not pkg.native:
@@ -230,8 +233,9 @@ class Petal(ColorMaker):
                     src = f'(included from {tilde_path(xpkg.src)})'
                 line += f' {self._c(src)}'
             log(line)
-            for p, level in pkgs.walk(name):
-                log(_pkg_line(p, level))
+            if not explicit_only:
+                for p, level in pkgs.walk(name):
+                    log(_pkg_line(p, level))
 
         explicit_names = set(p.name for p in explicits)
         orphans = [p for p in pkgs.orphans()
