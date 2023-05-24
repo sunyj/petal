@@ -24,6 +24,11 @@ def die_usage():
   Create or recover an environment
        petal make [env] [with /usr/bin/python3] [over|on base_env ...]
 
+  Rebuild environment (from scratch)
+       petal rebuild [options] env
+             -c, --clean     clean the env only
+             -s, --scratch   rebuild from scrach, implies --clean
+
   Install packages
        petal add [pip install params ...] [to env]
              alias of add command: install
@@ -64,7 +69,7 @@ class Petal(ColorMaker):
     def __init__(self):
         super().__init__()
         self.exit_code = 0
-        self.python = '/usr/bin/python3.8'
+        self.python = os.path.realpath(sys.executable)
         self.pypi = os.environ.get('PETAL_PYPI',
                                    'https://pypi.tuna.tsinghua.edu.cn')
 
@@ -105,25 +110,30 @@ class Petal(ColorMaker):
         exit(self.exit_code)
 
 
+    def _get_python(self, args):
+        if not args or 'with' not in args:
+            return args
+        idx = args.index('with') + 1
+        if idx >= len(args):
+            die_usage()
+        self.python = args[idx]
+        if not os.path.exists(self.python):
+            die(f'{self.python} not found!')
+        self.python = os.path.realpath(self.python)
+        args[idx] = ''
+        args[idx-1] = ''
+        return list(filter(None, args))
+
+
     def cmd_make(self, args):
+        if args:
+            args = self._get_python(args)
         env_dir = args[0] if args else 'env'
         if not os.path.exists(env_dir):
-            if len(args) > 2:
-                args = args[1:]
-                if 'with' in args:
-                    idx = args.index('with') + 1
-                    if idx >= len(args):
-                        die_usage()
-                    self.python = args[idx]
-                    if not os.path.exists(self.python):
-                        die(f'{self.python} not found!')
-                    self.python = os.path.realpath(self.python)
-                    args[idx] = ''
-                    args[idx-1] = ''
-                    args = list(filter(None, args))
-                if args[0] not in ['over', 'on'] or len(args) < 2:
-                    die_usage()
+            if len(args) > 1 and args[0] in ['over', 'on']:
                 layers = args[1:]
+            elif len(args):
+                die_usage()
             else:
                 layers = []
             self.env_new(env_dir, layers)
@@ -134,10 +144,35 @@ class Petal(ColorMaker):
 
 
     def cmd_rebuild(self, args):
+        "Rebuild env"
+
+        opts = [x for x in args if x.startswith('-')]
+        args = [x for x in args if not x.startswith('-')]
         if len(args) != 1:
             die_usage()
-        env = PetalEnv(args[0])
-        print(env.require.pkgs)
+        clean_only   = '-c' in opts or '--clean' in opts
+        from_scratch = '-s' in opts or '--scratch' in opts
+        env_dir = Path(args[0])
+
+        # if rebuild from scratch, delete everything first
+        if from_scratch or clean_only:
+            git_ignored = read_lines(env_dir / '.gitignore')
+            excluded = set(x[1:] for x in git_ignored if x.startswith('!'))
+            for d in env_dir.iterdir():
+                if d.name not in excluded:
+                    if d.is_dir():
+                        shutil.rmtree(d, ignore_errors=True)
+                    else:
+                        os.unlink(d)
+            log(f'{env_dir} cleaned up')
+
+        if from_scratch:
+            self.env_build(env_dir, with_packages=False)
+
+        if not clean_only:
+            env = PetalEnv(env_dir)
+            self._run_pip(env.pip('install', env.require.specs))
+            env.freeze()
 
 
     def cmd_show(self, args):
@@ -168,7 +203,7 @@ class Petal(ColorMaker):
             die('empty env')
 
         pkgs = PackageSet(env)
-        print(f'packages in {self._y(env)}:')
+        log(f'packages in {self._y(env)}:')
         for xpkg in explicits:
             name = xpkg.name
             pkg = pkgs[name]
@@ -183,17 +218,17 @@ class Petal(ColorMaker):
                 else:
                     src = f'(included from {tilde_path(xpkg.src)})'
                 line += f' {self._c(src)}'
-            print(line)
+            log(line)
             for p, level in pkgs.walk(name):
-                print(_pkg_line(p, level))
+                log(_pkg_line(p, level))
 
         explicit_names = set(p.name for p in explicits)
         orphans = [p for p in pkgs.orphans()
                    if p.native and p.name not in explicit_names]
         if orphans:
-            print('- (orphans)')
+            log('- (orphans)')
             for p in orphans:
-                print(_pkg_line(p, 1, '?'))
+                log(_pkg_line(p, 1, '?'))
 
 
     def _pstr(self, pkgs):
@@ -408,12 +443,7 @@ class Petal(ColorMaker):
             layers = [self.calc_layer_path(env, layer) for layer in layers]
 
         # make PEP-405 virtual env
-        make_dir(env / self.user_site)
-        make_dir(env / 'bin')
-        os.symlink(self.python, env / 'bin' / 'python')
-        write_file(env / 'pyvenv.cfg',
-                   [f'home = {os.path.dirname(self.python)}',
-                    f'include-system-site-packages = false'])
+        self.create_pep405(env)
 
         # bootstrap pip for core env
         if is_core:
@@ -440,9 +470,47 @@ class Petal(ColorMaker):
         log(msg)
 
 
-    def env_build(self, path):
-        print('build', path)
-        ...
+    def env_build(self, path, *, with_packages=True):
+        env = Path(path)
+        if not env.is_dir():
+            die(f'{path} is not a directory')
+
+        # check Python version
+        with open(env / 'petal.json') as f:
+            cfg = json.load(f)
+        env_py = cfg['python']
+        if env_py != self.py_version:
+            die(f'{path} uses Python {env_py}')
+
+        freeze = env / 'petal.freeze' 
+        if not freeze.exists():
+            die(f'{str(freeze)} not found!')
+
+        # create it
+        self.create_pep405(env)
+        self.install_layers_hack(env)
+        log(f'environment {self._y(env)} made with {self._g(self.python)}')
+
+        # restore packages
+        if with_packages:
+            freeze_file = str(freeze.resolve())
+            self._run_pip(PetalEnv(env).pip('install', ['-r', freeze_file]))
+
+
+    def create_pep405(self, env):
+        "make PEP-405 virtual env"
+
+        for f in ['bin', 'lib', 'pyvenv.cfg']:
+            if (env / f).exists():
+                log(f'{env} seems ready, {str(env/f)} found')
+                return
+
+        make_dir(env / 'bin')
+        os.symlink(self.python, env / 'bin' / 'python')
+        make_dir(env / self.user_site)
+        write_file(env / 'pyvenv.cfg',
+                   [f'home = {os.path.dirname(self.python)}',
+                    f'include-system-site-packages = false'])
 
 
     def calc_layer_path(self, env, layer):
