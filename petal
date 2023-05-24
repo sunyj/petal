@@ -35,7 +35,7 @@ Usage: petal <command> [args ...]\n
              -d, --deep      show packages in base environment(s)
              -v, --version   show package version
              -s, --source    show package source
-             -x, --explicit  show explicit packages only
+             -a, --all       show all packages
 
     Install packages
        petal add <pip install params ...> [to env]
@@ -196,7 +196,7 @@ class Petal(ColorMaker):
         show_version = '-v' in opts or '--version' in opts
         deep = '-d' in opts or '--deep' in opts
         show_src = '-s' in opts or '--source' in opts
-        explicit_only = '-x' in opts or '--explicit' in opts
+        show_all = '-a' in opts or '--all' in opts
 
         # find the env we're working on
         env = PetalEnv(args[0]) if len(args) else self.default_env
@@ -233,7 +233,7 @@ class Petal(ColorMaker):
                     src = f'(included from {tilde_path(xpkg.src)})'
                 line += f' {self._c(src)}'
             log(line)
-            if not explicit_only:
+            if show_all:
                 for p, level in pkgs.walk(name):
                     log(_pkg_line(p, level))
 
