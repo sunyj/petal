@@ -687,13 +687,14 @@ def scan_layers(root=None):
 class Package:
     "Abstraction of single package."
 
-    def __init__(self, pkg):
+    def __init__(self, pkg, extras=[]):
         self.disp = pkg.project_name
         self.name = self.disp.lower()
+        self.extras = extras
         self.env = grep(r'^(.+)/lib/python.+/site-packages', pkg.module_path)
         self.native = True
         self.version = pkg.version
-        self.depon = [x.name.lower() for x in pkg.requires()]
+        self.depon = [x.name.lower() for x in pkg.requires(extras=extras)]
         self.depby = set()
     def __str__(self): return self.disp
     def __repr__(self): return f'Package({self.disp})'
@@ -994,13 +995,19 @@ class PetalEnv(ColorMaker):
 
 
     def list_installed(self, deep=True):
-        search_paths = self.paths(include_core=False)
-        pkgs = []
+        # get extras info for more acurate dependencies
+        lut = {}
+        for p in self.explicit_packages(deep=deep):
+            mo = re.search(r'\[(.+)\]', p.spec)
+            if mo:
+                lut[p.name] = [x.strip() for x in mo.group(1).split(',')]
+        # list all installed packages
         with self.core.tapped():
-            from pip._internal.metadata import pkg_resources
-            e = pkg_resources.Environment.from_paths(search_paths)
+            from pip._internal.metadata import pkg_resources as pkgres
+            e = pkgres.Environment.from_paths(self.paths(include_core=False))
             dists = e.iter_installed_distributions()
-            pkgs = [Package(d._dist) for d in dists]
+            pkgs = [Package(d._dist, lut.get(d._dist.project_name.lower(), []))
+                    for d in dists]
         if deep:
             return pkgs
         return [p for p in pkgs if p.env == str(self.path)]
