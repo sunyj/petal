@@ -374,12 +374,12 @@ class Petal(ColorMaker):
                     die(f'package {self._g(name)} not found in {env}')
                 collaterals.update(p for p in iset.dep_on(name))
             removing = set(iset[p] for p in uninstall) | collaterals
-            orphans = [p.name for p in collaterals # a package is orphaned if it's:
-                       # native (never remove packages in base envs), and
+            orphans = [p.name for p in collaterals # a package is orphaned if:
+                       # it's native (never remove packages in base envs), and
                        if p.native and
                        # not in explicit set, and
                        p.name not in installed and
-                       # not needed by any other packages except those on the list
+                       # not needed by any other remaining packages
                        not set(iset.dep_by(p.name)) - removing]
             cmd = env.pip('uninstall', ['--yes'] + uninstall + orphans)
             if not dryrun:
@@ -524,7 +524,7 @@ class Petal(ColorMaker):
         if env_py != self.py_version:
             die(f'{path} uses Python {env_py}')
 
-        freeze = env / 'petal.freeze' 
+        freeze = env / 'petal.freeze'
         if not freeze.exists():
             die(f'{str(freeze)} not found!')
 
