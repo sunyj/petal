@@ -22,33 +22,36 @@ INSTALL_SPEC_CACHE = 'install-command-spec.json'
 def die_usage():
     print("""
 Usage: petal <command> [args ...]\n
-    Create or recover environments
+    Environment creation or recovery
        petal make [env] [with /usr/bin/python3] [over|on base_env ...]
 
-    Rebuild or clean environments
+    Environment rebuild
        petal rebuild [options] env
              -c, --clean     clean the env only
              -s, --scratch   rebuild from scrach, implies --clean
 
-    Inspect environments
+    Environment inspection
        petal show [options] [env]
              -d, --deep      show packages in base environment(s)
              -v, --version   show package version
              -s, --source    show package source
              -a, --all       show all packages
 
-    Install packages
+    Environment delivery
+       petal deliver env [to] destination
+
+    Package install
        petal add <pip install params ...> [to env]
              alias of add command: install
 
-    Remove packages
+    Package removal
        petal del package ... [from env]
              aliases of del command: remove, uninstall
 
-    Upgrade packages
+    Package upgrade
        petal upgrade <package ... | all | pip> [in env]
 
-    Print action plans
+    Package action plan
        petal plan add | del | upgrade ... [on env]
 """.strip())
 
@@ -188,6 +191,39 @@ class Petal(ColorMaker):
             env.freeze()
 
 
+    def cmd_deliver(self, args):
+        "Copy env with packages in its bases to a new directory."
+
+        # parse args
+        if len(args) == 3:
+            if args[1] != 'to':
+                die_usage()
+            src_path, dst_path = args[0], args[2]
+        elif len(args) == 2:
+            src_path, dst_path = args
+        else:
+            die_usage()
+
+        # resolve correct source and destination
+        src = PetalEnv(src_path)
+        dst = Path(dst_path)
+        if dst.exists():
+            if not dst.is_dir():
+                die(f'{dst} found but not a directory')
+            dst = dst / src.path.name
+            if dst.exists():
+                die(f'{dst} already exists')
+        log(f'deliver {self._estr(src)} to {self._estr(dst)}')
+
+        # create an empty env
+        self.create_pep405(dst, python=(src.path / 'bin' / 'python').resolve())
+
+        # copy packages bottom-up from src and its bases to dst env
+        for env in reversed(list(src.walk())):
+            log(f'copy {self._estr(env)} ==> {self._estr(dst)}')
+            env.copy_packages(dst)
+
+
     def cmd_show(self, args):
         "Remove pakcages from env."
 
@@ -244,24 +280,6 @@ class Petal(ColorMaker):
             log('- (orphans)')
             for p in orphans:
                 log(_pkg_line(p, 1, '?'))
-
-
-    def _pstr(self, pkgs):
-        "Package display helper."
-
-        if isinstance(pkgs, Iterable):
-            return ', '.join(self._g(p) for p in pkgs)
-        return self._g(kgs)
-
-
-    def _run_pip(self, cmd, dry=False):
-        run = dry and 'plan to run ' or 'run '
-        log(run, self._c('PETAL_USE_CORE=1 ' + tilde_path(' '.join(cmd))))
-        if dry:
-            return
-        code = os_run(cmd, PETAL_USE_CORE=1)
-        if code:
-            sys.exit(code)
 
 
     def cmd_add(self, args, dryrun=False):
@@ -549,7 +567,33 @@ class Petal(ColorMaker):
             die(f'{path} uses python{env.py_version}, need {self.py_version}')
 
 
-    def create_pep405(self, env):
+    def _pstr(self, pkgs):
+        "Package display helper."
+
+        if isinstance(pkgs, Iterable):
+            return ', '.join(self._g(p) for p in pkgs)
+        return self._g(pkgs)
+
+
+    def _estr(self, envs):
+        "Environment display helper."
+
+        if isinstance(envs, list):
+            return ', '.join(self._estr(p) for p in envs)
+        return self._y(tilde_path(envs))
+
+
+    def _run_pip(self, cmd, dry=False):
+        run = dry and 'plan to run ' or 'run '
+        log(run, self._c('PETAL_USE_CORE=1 ' + tilde_path(' '.join(cmd))))
+        if dry:
+            return
+        code = os_run(cmd, PETAL_USE_CORE=1)
+        if code:
+            sys.exit(code)
+
+
+    def create_pep405(self, env, *, python=None):
         "Make a bare PEP-405 virtual environment."
 
         for f in ['bin', 'lib', 'pyvenv.cfg']:
@@ -558,7 +602,7 @@ class Petal(ColorMaker):
                 return
 
         make_dir(env / 'bin')
-        os.symlink(self.python, env / 'bin' / 'python')
+        os.symlink(python or self.python, env / 'bin' / 'python')
         make_dir(env / self.user_site)
         write_file(env / 'pyvenv.cfg',
                    [f'home = {os.path.dirname(self.python)}',
@@ -876,6 +920,21 @@ class PetalEnv(ColorMaker):
         return self.path / 'lib' / f'python{self.py_version}' / 'site-packages'
 
 
+    def copy_packages(self, dst):
+        "Copy site-packages."
+
+        if isinstance(dst, PetalEnv):
+            dst = dst.site_path
+        else:
+            dst = Path(dst)
+            if (dst / 'pyvenv.cfg').exists():
+                dst = next(iter((dst / 'lib').iterdir())) / 'site-packages'
+        shutil.copytree(self.site_path, dst,
+                        ignore=shutil.ignore_patterns('_petal*.*',
+                                                      'petal*.pth'),
+                        dirs_exist_ok=True)
+
+
     def explicit_packages(self, deep=False):
         "Explicit packages."
 
@@ -896,6 +955,15 @@ class PetalEnv(ColorMaker):
         for e in self.layers:
             ret += e.paths(include_core)
         return ret
+
+
+    def walk(self, *, include_core=False):
+        "A generator to walk down all layers."
+
+        if include_core or not self.is_core:
+            yield self
+        for p in self.bases:
+            yield from PetalEnv(p).walk(include_core=include_core)
 
 
     def pip(self, cmd, args):
