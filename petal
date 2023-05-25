@@ -376,11 +376,11 @@ class Petal(ColorMaker):
             removing = set(iset[p] for p in uninstall) | collaterals
             orphans = [p.name for p in collaterals # a package is orphaned if:
                        # it's native (never remove packages in base envs), and
-                       if p.native and
+                       if p.native
                        # not in explicit set, and
-                       p.name not in installed and
+                       and p.name not in installed
                        # not needed by any other remaining packages
-                       not set(iset.dep_by(p.name)) - removing]
+                       and not set(iset.dep_by(p.name)) - removing]
             cmd = env.pip('uninstall', ['--yes'] + uninstall + orphans)
             if not dryrun:
                 self._run_pip(cmd)
@@ -781,12 +781,14 @@ class XPackage:
 class XRequired:
     "Explicitly required packages."
 
-    def __init__(self, specs=[], src=None):
+    def __init__(self, specs=[], *, src=None, pwd=None):
         self.lines = []
         self.pkgs = {}
-        self.src = src if src else None
-        cwd = Path(os.getcwd())
-        self.pwd = (Path(src).parent if src else cwd).resolve()
+        self.src = src
+        if self.src is None:
+            self.pwd = pwd if pwd else Path(os.getcwd())
+        else:
+            self.pwd = Path(self.src).parent.resolve()
         for spec in specs:
             if not isinstance(spec, str) or not spec:
                 continue
@@ -794,7 +796,7 @@ class XRequired:
                 include = self.pwd / Path(spec)
                 if not include.exists():
                     continue
-                relpath = os.path.relpath(include.resolve(), cwd)
+                relpath = os.path.relpath(include.resolve(), self.pwd)
                 inc = XRequired(read_lines(include), src=relpath)
                 for name, xpkg in inc.pkgs.items():
                     if name not in self.pkgs:
@@ -869,12 +871,12 @@ class PetalEnv(ColorMaker):
         self.bases = []
         if self.is_core:
             self.py_version = grep(r'^python(\d.+)$', self.path.name)
-            self.require = XRequired()
+            self.require = XRequired(pwd=self.path.parent)
             return
         with open(env_cfg) as f:
             self.cfg = json.load(f)
         self.py_version = self.cfg['python']
-        self.require = XRequired(self.cfg['require'])
+        self.require = XRequired(self.cfg['require'], pwd=self.path.parent)
         with suppress(Exception):
             bases = self.cfg['bases']
             if not bases:
@@ -960,8 +962,10 @@ class PetalEnv(ColorMaker):
     def walk(self, *, include_core=False):
         "A generator to walk down all layers."
 
-        if include_core or not self.is_core:
-            yield self
+        if self.is_core and not include_core:
+            return
+
+        yield self
         for p in self.bases:
             yield from PetalEnv(p).walk(include_core=include_core)
 
@@ -1087,7 +1091,7 @@ class PetalEnv(ColorMaker):
 
     def update_require(self, req, freeze=True):
         self.cfg['require'] = req
-        self.require = XRequired(req)
+        self.require = XRequired(req, pwd=self.path.parent)
         dump_json(self.conf_file, self.cfg)
         if freeze:
             self.freeze()
