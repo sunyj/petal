@@ -42,6 +42,7 @@ Usage: petal <command> [args ...]\n
 
     Package install
        petal add <pip install params ...> [to env]
+       petal add ../another/package_list [to env]
              alias of add command: install
 
     Package removal
@@ -157,6 +158,7 @@ class Petal(ColorMaker):
             if len(args) > 1:
                 die_usage()
             self.env_build(env_dir)
+            self.env_restore(env_dir)
 
 
     def cmd_rebuild(self, args):
@@ -170,7 +172,7 @@ class Petal(ColorMaker):
         from_scratch = '-s' in opts or '--scratch' in opts
         env_dir = Path(args[0])
 
-        # if rebuild from scratch, delete everything first
+        # delete everything
         if from_scratch or clean_only:
             git_ignored = read_lines(env_dir / '.gitignore')
             excluded = set(x[1:] for x in git_ignored if x.startswith('!'))
@@ -183,7 +185,7 @@ class Petal(ColorMaker):
             log(f'{env_dir} cleaned up')
 
         if from_scratch:
-            self.env_build(env_dir, with_packages=False)
+            self.env_build(env_dir)
 
         if not clean_only:
             env = PetalEnv(env_dir)
@@ -510,8 +512,8 @@ class Petal(ColorMaker):
         log(msg)
 
 
-    def env_build(self, path, *, with_packages=True):
-        "Build a petal environment."
+    def env_build(self, path):
+        "Build a petal environment from existing specs."
 
         env = Path(path)
         if not env.is_dir():
@@ -529,14 +531,42 @@ class Petal(ColorMaker):
             die(f'{str(freeze)} not found!')
 
         # create it
+        for f in ['pyvenv.cfg', 'bin', 'lib']:
+            if (env / f).exists():
+                env = env.resolve()
+                log(f'{self._estr(env)} seems ready'
+                    f' (found {self._estr(env / f)})')
+                return
+
         self.create_pep405(env)
         self.install_layers_hack(env)
         log(f'environment {self._y(env)} made with {self._g(self.python)}')
 
-        # restore packages
-        if with_packages:
-            freeze_file = str(freeze.resolve())
-            self._run_pip(PetalEnv(env).pip('install', ['-r', freeze_file]))
+
+    def env_restore(self, path):
+        "Restore packages in a petal environment."
+
+        env = isinstance(path, PetalEnv) and path or PetalEnv(path)
+        freeze = env.path / 'petal.freeze'
+        if not freeze.exists():
+            die(f'{freeze} not found!')
+
+        freeze_empty = os.stat(freeze).st_size == 0
+        if freeze_empty:
+            log(f'{freeze} seems empty')
+            return
+
+        lib_empty = not any(True for p in env.site_path.iterdir())
+        if not lib_empty:
+            # check if it's different from freeze file
+            installed = sorted([f'{p.name}=={p.version}'
+                                for p in env.list_installed()])
+            freezed = sorted(read_lines(freeze))
+            if installed == freezed:
+                log(f'{self._estr(env)} seems up-to-date')
+                return
+
+        self._run_pip(env.pip('install', ['-r', str(freeze.resolve())]))
 
 
     def _ensure_core(self):
@@ -595,11 +625,6 @@ class Petal(ColorMaker):
 
     def create_pep405(self, env, *, python=None):
         "Make a bare PEP-405 virtual environment."
-
-        for f in ['bin', 'lib', 'pyvenv.cfg']:
-            if (env / f).exists():
-                log(f'{env} seems ready, {str(env/f)} found')
-                return
 
         make_dir(env / 'bin')
         os.symlink(python or self.python, env / 'bin' / 'python')
