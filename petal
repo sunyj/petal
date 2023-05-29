@@ -294,10 +294,18 @@ class Petal(ColorMaker):
         else:
             env = self.default_env
 
+        # install to a naive env
+        if env.is_naive:
+            self._ensure_core(env.py_version)
+            pip_cmd = env.pip('install', args)
+            env_vars = {'PYTHONPATH': str(env.core.site_path)}
+            self._run_pip(pip_cmd, dry=dryrun, env=env_vars)
+            return
+
         # get requested packages from command line
+        pip_opts, wanted_specs = env.split_install_args(args)
         installed_pkgs = env.list_installed(deep=False)
         installed = set(pkg.name for pkg in installed_pkgs)
-        pip_opts, wanted_specs = env.split_install_args(args)
         wanted = XRequired(wanted_specs)
         if not wanted:
             die('no package to install')
@@ -569,10 +577,12 @@ class Petal(ColorMaker):
         self._run_pip(env.pip('install', ['-r', str(freeze.resolve())]))
 
 
-    def _ensure_core(self):
+    def _ensure_core(self, version=None):
         "Return core env.  Make it if necessary."
 
-        env = f'~/.cache/petal.py/core/python{self.py_version}'
+        if not version:
+            version = self.py_version
+        env = f'~/.cache/petal.py/core/python{version}'
         if Path(env).expanduser().exists():
             return env
 
@@ -613,12 +623,15 @@ class Petal(ColorMaker):
         return self._y(tilde_path(envs))
 
 
-    def _run_pip(self, cmd, dry=False):
+    def _run_pip(self, cmd, dry=False, *, env=None):
         run = dry and 'plan to run ' or 'run '
-        log(run, self._c('PETAL_USE_CORE=1 ' + tilde_path(' '.join(cmd))))
+        if not env:
+            env = {'PETAL_USE_CORE': '1'}
+        env_str = ' '.join(f'{key}={val}' for key, val in env.items())
+        log(run, self._c(f'{env_str} ' + tilde_path(' '.join(cmd))))
         if dry:
             return
-        code = os_run(cmd, PETAL_USE_CORE=1)
+        code = os_run(cmd, **env)
         if code:
             sys.exit(code)
 
@@ -891,27 +904,42 @@ class PetalEnv(ColorMaker):
         self.path = Path(path).expanduser().resolve()
         if not (self.path / 'pyvenv.cfg').is_file():
             die(f'invalid env {path}')
-        env_cfg = self.path / 'petal.json'
         self.cfg = {}
-        self.is_core = not env_cfg.exists()
+        with suppress(FileNotFoundError):
+            with open(self.path / 'petal.json') as f:
+                self.cfg = json.load(f)
+        self.is_core = False
+        self.is_naive = False
         self.bases = []
-        if self.is_core:
-            self.py_version = grep(r'^python(\d.+)$', self.path.name)
+        bases = []
+        if self.cfg:
+            self.py_version = self.cfg['python']
+            self.require = XRequired(self.cfg['require'], pwd=self.path.parent)
+            bases = self.cfg.get('bases', [])
+        else:
             self.require = XRequired(pwd=self.path.parent)
+            if (self.path / INSTALL_SPEC_CACHE).exists():
+                self.is_core = True
+                self.py_version = grep(r'^python(\d.+)$', self.path.name)
+            else:
+                self.is_naive = True
+                self.py_version = check_output(
+                    [f'{str(self.path)}/bin/python', '-c',
+                     'import sys; v = sys.version_info;'
+                     ' print(f"{v[0]}.{v[1]}")'])
+        if not self.py_version:
+            die(f'Python version not found in {self.path}')
+
+        if self.is_core:
             return
-        with open(env_cfg) as f:
-            self.cfg = json.load(f)
-        self.py_version = self.cfg['python']
-        self.require = XRequired(self.cfg['require'], pwd=self.path.parent)
-        with suppress(Exception):
-            bases = self.cfg['bases']
-            if not bases:
-                bases = [f'~/.cache/petal.py/core/python{self.py_version}']
-            for d in bases:
-                layer = d[0] in ['/', '~'] and Path(d) or self.path / d
-                layer = layer.expanduser().resolve()
-                if layer.is_dir():
-                    self.bases.append(layer)
+
+        if not bases:
+            bases = [f'~/.cache/petal.py/core/python{self.py_version}']
+        for d in bases:
+            layer = d[0] in ['/', '~'] and Path(d) or self.path / d
+            layer = layer.expanduser().resolve()
+            if layer.is_dir():
+                self.bases.append(layer)
 
 
     @property
@@ -939,7 +967,7 @@ class PetalEnv(ColorMaker):
         for e in self.layers:
             # we don't need to loop through all layers
             return e.core
-        die('core env not found')
+        raise RuntimeError('core env not found')
 
 
     @property
@@ -1140,7 +1168,13 @@ class PetalEnv(ColorMaker):
 
 
     def __repr__(self):
-        return 'Petal%s(%s)' % (self.is_core and 'Core' or 'Env', self.path)
+        if self.is_core:
+            env_type = 'Core'
+        elif self.is_naive:
+            env_type = 'Naive'
+        else:
+            env_type = 'Env'
+        return f'Petal{env_type}({self.path})'
 
 
 def die(msg):
