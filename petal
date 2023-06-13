@@ -218,6 +218,7 @@ class Petal(ColorMaker):
         log(f'deliver {self._estr(src)} to {self._estr(dst)}')
 
         # create an empty env
+        self._ensure_core()
         self.create_pep405(dst, python=(src.path / 'bin' / 'python').resolve())
 
         # copy packages bottom-up from src and its bases to dst env
@@ -539,7 +540,7 @@ class Petal(ColorMaker):
             die(f'{str(freeze)} not found!')
 
         if not cfg.get('bases', []):
-            self._ensure_core(env_py)
+            self._ensure_core()
 
         # create it
         for f in ['pyvenv.cfg', 'bin', 'lib']:
@@ -933,7 +934,7 @@ class PetalEnv(ColorMaker):
         if not self.py_version:
             die(f'Python version not found in {self.path}')
 
-        if self.is_core:
+        if self.is_core or self.is_naive:
             return
 
         if not bases:
@@ -964,13 +965,12 @@ class PetalEnv(ColorMaker):
 
     @property
     def core(self):
-        "Find core env recursively."
-        if self.is_core or self.is_naive:
+        if self.is_core:
             return self
-        for e in self.layers:
-            # we don't need to loop through all layers
-            return e.core
-        raise RuntimeError('core env not found')
+        core_path = f'~/.cache/petal.py/core/python{self.py_version}'
+        if not Path(core_path).expanduser().is_dir():
+            raise RuntimeError(f'core env {core_path} not found')
+        return PetalEnv(core_path)
 
 
     @property
