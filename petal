@@ -538,6 +538,9 @@ class Petal(ColorMaker):
         if not freeze.exists():
             die(f'{str(freeze)} not found!')
 
+        if not cfg.get('bases', []):
+            self._ensure_core(env_py)
+
         # create it
         for f in ['pyvenv.cfg', 'bin', 'lib']:
             if (env / f).exists():
@@ -593,7 +596,7 @@ class Petal(ColorMaker):
             shutil.rmtree(env, ignore_errors=True)
             error = e
         if error:
-            raise Error
+            raise error
 
         return env
 
@@ -962,7 +965,7 @@ class PetalEnv(ColorMaker):
     @property
     def core(self):
         "Find core env recursively."
-        if self.is_core:
+        if self.is_core or self.is_naive:
             return self
         for e in self.layers:
             # we don't need to loop through all layers
