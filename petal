@@ -32,10 +32,10 @@ Usage: petal <command> [args ...]\n
 
     Environment inspection
        petal show [options] [env]
-             -d, --deep      show packages in base environment(s)
-             -v, --version   show package version
-             -s, --source    show package source
              -a, --all       show all packages
+             -d, --deep      show packages in base environment(s)
+             -s, --source    show package source
+             -v, --version   show package version
 
     Environment delivery
        petal deliver env [to] destination
