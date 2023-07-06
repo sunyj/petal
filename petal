@@ -215,7 +215,6 @@ class Petal(ColorMaker):
             dst = dst / src.path.name
             if dst.exists():
                 die(f'{dst} already exists')
-        log(f'deliver {self._estr(src)} to {self._estr(dst)}')
 
         # create an empty env
         self._ensure_core()
@@ -223,8 +222,9 @@ class Petal(ColorMaker):
 
         # copy packages bottom-up from src and its bases to dst env
         for env in reversed(list(src.walk())):
-            log(f'copy {self._estr(env)} ==> {self._estr(dst)}')
             env.copy_packages(dst)
+
+        log(f'deliver {self._estr(src)} ==> {self._estr(dst)}')
 
 
     def cmd_show(self, args):
@@ -664,19 +664,23 @@ class Petal(ColorMaker):
     def bootstrap_pip(self, env):
         "Download pip wheel package and install it."
 
-        data = json.loads(download_url(f'{self.pypi}/pypi/pip/json'))
-        pip_url = re.sub(r'https?://[^/]*', self.pypi, data['urls'][0]['url'])
-        fname = os.path.basename(pip_url)
-        pip_ver = fname.split('-')[1]
-        with tempfile.TemporaryDirectory(suffix=".petal") as tmp:
-            log('download pip ' + self._b(pip_ver) + f' from {self.pypi}')
-            py = f'{env}/bin/python'
-            whl = f'{tmp}/{fname}'
-            download_url(pip_url, whl)
-            os_run(f'{py} {whl}/pip install --no-index -q {whl}')
-            # cache pip install command spec
-            PetalEnv(env)._get_install_spec()
-            log(f'pip bootstrap done for {self._y(env)}')
+        try:
+            data = json.loads(download_url(f'{self.pypi}/pypi/pip/json'))
+            pip_url = re.sub(r'https?://[^/]*', self.pypi, data['urls'][0]['url'])
+            fname = os.path.basename(pip_url)
+            pip_ver = fname.split('-')[1]
+            with tempfile.TemporaryDirectory(suffix=".petal") as tmp:
+                log('download pip ' + self._b(pip_ver) + f' from {self.pypi}')
+                py = f'{env}/bin/python'
+                whl = f'{tmp}/{fname}'
+                download_url(pip_url, whl)
+                os_run(f'{py} {whl}/pip install --no-index -q {whl}')
+        except Exception as e:
+            shutil.rmtree(env, ignore_errors=True)
+            raise
+        # cache pip install command spec
+        PetalEnv(env)._get_install_spec()
+        log(f'pip bootstrap done for {self._y(env)}')
 
 
     def install_layers_hack(self, env):
@@ -1214,7 +1218,14 @@ def pkg_name(name):
 
 
 def download_url(url, filename=None, *, timeout=10):
-    data = urllib.request.urlopen(url, timeout=timeout).read()
+    data = None
+    try:
+        error = None
+        data = urllib.request.urlopen(url, timeout=timeout).read()
+    except Exception as e:
+        error = str(e)
+    if data is None:
+        raise RuntimeError(f'failed to grab {url} ({error})')
     if filename:
         with open(filename, 'wb+') as f:
             f.write(data)
