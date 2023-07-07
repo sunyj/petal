@@ -3,7 +3,9 @@ import os
 import re
 import sys
 import json
+import time
 import shutil
+import asyncio
 import tempfile
 import subprocess
 import urllib.request
@@ -15,8 +17,17 @@ from contextlib import suppress, contextmanager
 sys.path = [p for p in sys.path if not re.search(r'/dist-packages$', p)]
 
 
-CMD_ALIASES = {'install': 'add', 'remove': 'del', 'uninstall': 'del'}
 INSTALL_SPEC_CACHE = 'install-command-spec.json'
+
+CMD_ALIASES = {'install': 'add',
+               'remove': 'del',
+               'uninstall': 'del',
+               }
+
+PYPI_SOURCES = ['pypi.org',
+                'pypi.doubanio.com',
+                'pypi.tuna.tsinghua.edu.cn',
+                ]
 
 
 def die_usage():
@@ -55,7 +66,6 @@ Usage: petal <command> [args ...]\n
     Package action plan
        petal plan add | del | upgrade ... [on env]
 """.strip())
-
     sys.exit(1)
 
 
@@ -79,8 +89,6 @@ class Petal(ColorMaker):
         super().__init__()
         self.exit_code = 0
         self.python = os.path.realpath(sys.executable)
-        self.pypi = os.environ.get('PETAL_PYPI',
-                                   'https://pypi.tuna.tsinghua.edu.cn')
 
 
     @property
@@ -102,8 +110,8 @@ class Petal(ColorMaker):
         if not envs:
             die('No env found!')
         if len(envs) > 1:
-            env_str = ', '.join(self._y(tilde_path(x)) for x in envs)
-            die(f'Multiple envs found, you need to choose one from: {env_str}')
+            die(f'Multiple envs found, you need to choose one from:'
+                f' {self._env(envs)}')
         return PetalEnv(envs[0])
 
 
@@ -224,11 +232,11 @@ class Petal(ColorMaker):
         for env in reversed(list(src.walk())):
             env.copy_packages(dst)
 
-        log(f'deliver {self._estr(src)} ==> {self._estr(dst)}')
+        log(f'deliver {self._env(src)} ==> {self._url(dst)}')
 
 
     def cmd_show(self, args):
-        "Remove pakcages from env."
+        "Show installed packages."
 
         opts = [x for x in args if x.startswith('-')]
         args = [x for x in args if not x.startswith('-')]
@@ -244,7 +252,7 @@ class Petal(ColorMaker):
             prefix = '  ' * level
             name = p.disp
             if show_version:
-                name += f' {self._b(p.version)}'
+                name += f' {self._ver(p.version)}'
             if p.native:
                 line = f'{sign} {name}'
             else:
@@ -256,13 +264,13 @@ class Petal(ColorMaker):
             die('empty env')
 
         pkgs = PackageSet(env)
-        log(f'packages in {self._y(env)}:')
+        log(f'packages in {self._env(env)}:')
         for xpkg in explicits:
             name = xpkg.name
             pkg = pkgs[name]
-            line = (pkg.native and '+ ' or '* ') + self._g(xpkg.spec)
+            line = (pkg.native and '+ ' or '* ') + self._pkg(xpkg.spec)
             if show_version:
-                line += f' {self._b(pkg.version)}'
+                line += f' {self._ver(pkg.version)}'
             if not pkg.native:
                 line += f' [{tilde_path(pkg.env)}]'
             if show_src:
@@ -320,10 +328,10 @@ class Petal(ColorMaker):
             selected = [p for p in wanted.names if p not in explicits]
             if selected:
                 if dryrun:
-                    log(f'[{env}] plan to promote {self._pstr(selected)}')
+                    log(f'[{env}] plan to promote {self._pkg(selected)}')
                 else:
                     env.add(selected, freeze=False)
-                    log(f'[{env}] promote {self._pstr(selected)} as explicit')
+                    log(f'[{env}] promote {self._pkg(selected)} as explicit')
             else:
                 log(dryrun and 'nothing in plan' or 'nothing to change')
             return
@@ -337,7 +345,7 @@ class Petal(ColorMaker):
 
         if '--dry-run' not in pip_opts:
             env.add(wanted.lines)
-            log(f'[{env}] packages installed: {self._pstr(install_specs)}')
+            log(f'[{env}] packages installed: {self._pkg(install_specs)}')
 
 
     def cmd_del(self, args, dryrun=False):
@@ -361,7 +369,7 @@ class Petal(ColorMaker):
         unknwon = [p for p in wanted if p not in iset]
         if unknwon:
             warn = self._r('unknown packages')
-            die(f'[{env}] {warn}: {self._pstr(unknwon)}')
+            die(f'[{env}] {warn}: {self._pkg(unknwon)}')
 
         # prevent removing packages from include entries
         excluded = [p for p in explicits
@@ -369,7 +377,7 @@ class Petal(ColorMaker):
         if excluded:
             log('NOT removing included packages:')
             for xpkg in excluded:
-                log(f'  {self._g(xpkg.name)}: {self._c(xpkg.src)}')
+                log(f'  {self._pkg(xpkg.name)}: {self._c(xpkg.src)}')
         wanted = [p for p in wanted if p not in excludes]
 
         # allow delisting packages without uninstalling them
@@ -382,7 +390,7 @@ class Petal(ColorMaker):
             collaterals = set()
             for name in uninstall:
                 if not name in iset:
-                    die(f'package {self._g(name)} not found in {env}')
+                    die(f'package {self._pkg(name)} not found in {env}')
                 collaterals.update(p for p in iset.dep_on(name))
             removing = set(iset[p] for p in uninstall) | collaterals
             orphans = [p.name for p in collaterals # a package is orphaned if:
@@ -395,11 +403,11 @@ class Petal(ColorMaker):
             cmd = env.pip('uninstall', ['--yes'] + uninstall + orphans)
             if not dryrun:
                 self._run_pip(cmd)
-                msg += f'[{env}] uninstalled: {self._pstr(uninstall)}'
+                msg += f'[{env}] uninstalled: {self._pkg(uninstall)}'
             else:
-                msg += f'[{env}] plan to uninstall: {self._pstr(uninstall)}'
+                msg += f'[{env}] plan to uninstall: {self._pkg(uninstall)}'
             if orphans:
-                msg += f', with dependencies: {self._pstr(orphans)}'
+                msg += f', with dependencies: {self._pkg(orphans)}'
 
         real_delist = [p for p in delist if p in installed]
         if real_delist:
@@ -407,11 +415,11 @@ class Petal(ColorMaker):
             if msg:
                 msg += '\n'
             if dryrun:
-                msg += f'[{env}] plan to delist {self._pstr(delist)}'
+                msg += f'[{env}] plan to delist {self._pkg(delist)}'
             else:
-                msg += f'[{env}] delist {self._pstr(delist)} from explicit set'
+                msg += f'[{env}] delist {self._pkg(delist)} from explicit set'
         elif not dryrun and delist:
-            msg += f'[{env}] ignore {self._pstr(delist)}'
+            msg += f'[{env}] ignore {self._pkg(delist)}'
 
         wanted = uninstall + delist
         if wanted:
@@ -499,7 +507,7 @@ class Petal(ColorMaker):
         # bootstrap pip for core env
         if is_core:
             self.bootstrap_pip(os.path.realpath(env))
-            log(f'petal core (python{self.py_version}) made: {self._y(path)}')
+            log(f'petal core (python{self.py_version}) made: {self._url(path)}')
             return
 
         # write files for petal env
@@ -511,12 +519,11 @@ class Petal(ColorMaker):
         write_file(env / '.gitignore',
                    ["*", "!.gitignore", "!petal.json", "!petal.freeze"])
 
-        msg = f'environment {self._y(path)} made'
+        msg = f'environment {self._env(path)} made'
         if layers:
             self.install_layers_hack(env)
-            msg += (' on top of [%s]' %
-                    ', '.join([self._y(layer) for layer in layers]))
-        msg += f' with {self._g(self.python)}'
+            msg += f' on top of [{self._env(layers)}]'
+        msg += f' with {self._c(self.python)}'
 
         log(msg)
 
@@ -546,13 +553,13 @@ class Petal(ColorMaker):
         for f in ['pyvenv.cfg', 'bin', 'lib']:
             if (env / f).exists():
                 env = env.resolve()
-                log(f'{self._estr(env)} seems ready'
-                    f' (found {self._estr(env / f)})')
+                log(f'{self._env(env)} seems ready'
+                    f' (found {self._url(env / f)})')
                 return
 
         self.create_pep405(env)
         self.install_layers_hack(env)
-        log(f'environment {self._y(env)} made with {self._g(self.python)}')
+        log(f'environment {self._env(env)} made with {self._c(self.python)}')
 
 
     def env_restore(self, path):
@@ -575,7 +582,7 @@ class Petal(ColorMaker):
                                 for p in env.list_installed()])
             freezed = sorted(read_lines(freeze))
             if installed == freezed:
-                log(f'{self._estr(env)} seems up-to-date')
+                log(f'{self._env(env)} seems up-to-date')
                 return
 
         self._run_pip(env.pip('install', ['-r', str(freeze.resolve())]))
@@ -611,20 +618,33 @@ class Petal(ColorMaker):
             die(f'{path} uses python{env.py_version}, need {self.py_version}')
 
 
-    def _pstr(self, pkgs):
+    def _pkg(self, pkgs):
         "Package display helper."
 
-        if isinstance(pkgs, Iterable):
+        if isinstance(pkgs, list):
             return ', '.join(self._g(p) for p in pkgs)
         return self._g(pkgs)
 
 
-    def _estr(self, envs):
+    def _env(self, envs):
         "Environment display helper."
 
         if isinstance(envs, list):
-            return ', '.join(self._estr(p) for p in envs)
+            return ', '.join(self._url(p) for p in envs)
         return self._y(tilde_path(envs))
+
+
+    def _url(self, envs):
+        "Path and URL display helper."
+
+        if isinstance(envs, list):
+            return ', '.join(self._url(p) for p in envs)
+        return self._m(tilde_path(envs))
+
+
+    def _ver(self, version):
+        "Version display helper."
+        return self._b(str(version))
 
 
     def _run_pip(self, cmd, dry=False, *, env=None):
@@ -632,7 +652,7 @@ class Petal(ColorMaker):
         if not env:
             env = {'PETAL_USE_CORE': '1'}
         env_str = ' '.join(f'{key}={val}' for key, val in env.items())
-        log(run, self._c(f'{env_str} ' + tilde_path(' '.join(cmd))))
+        log(run, self._url(f'{env_str} ' + tilde_path(' '.join(cmd))))
         if dry:
             return
         code = os_run(cmd, **env)
@@ -661,16 +681,18 @@ class Petal(ColorMaker):
         return os.path.relpath(layer, env.resolve())
 
 
-    def bootstrap_pip(self, env):
+    def bootstrap_pip(self, env, pypi=None):
         "Download pip wheel package and install it."
 
+        pypi = self.get_pypi_url()
+
         try:
-            data = json.loads(download_url(f'{self.pypi}/pypi/pip/json'))
-            pip_url = re.sub(r'https?://[^/]*', self.pypi, data['urls'][0]['url'])
+            data = json.loads(download_url(f'{pypi}/pypi/pip/json'))
+            pip_url = re.sub(r'https?://[^/]*', pypi, data['urls'][0]['url'])
             fname = os.path.basename(pip_url)
             pip_ver = fname.split('-')[1]
             with tempfile.TemporaryDirectory(suffix=".petal") as tmp:
-                log('download pip ' + self._b(pip_ver) + f' from {self.pypi}')
+                log(f'download pip {self._ver(pip_ver)} from {self._url(pypi)}')
                 py = f'{env}/bin/python'
                 whl = f'{tmp}/{fname}'
                 download_url(pip_url, whl)
@@ -680,7 +702,17 @@ class Petal(ColorMaker):
             raise
         # cache pip install command spec
         PetalEnv(env)._get_install_spec()
-        log(f'pip bootstrap done for {self._y(env)}')
+        log(f'pip bootstrap done for {self._env(env)}')
+
+
+    def get_pypi_url(self):
+        url = os.environ.get('PYPI', PYPI_SOURCES)
+        if isinstance(url, list):
+            ping = {host: ms for host, ms in tcp_ping(url, 443).items() if ms}
+            if not ping:
+                raise ValueError('No valid PyPI host found!')
+            url = next(iter(ping.keys()))
+        return '://' in url and url or 'https://' + url
 
 
     def install_layers_hack(self, env):
@@ -962,7 +994,7 @@ class PetalEnv(ColorMaker):
 
     @property
     def layers(self):
-        "Iterate all direct base layers."
+        "Iterate through all direct base layers."
         for p in self.bases:
             yield PetalEnv(p)
 
@@ -1290,6 +1322,26 @@ def tilde_path(path):
     home = str(Path('~').expanduser())
     p = str(path)
     return re.sub('^' + home, '~', p) if p.startswith(home) else p
+
+
+async def aio_tcp_ping(host, port, timeout):
+    if isinstance(host, list):
+        tasks = [aio_tcp_ping(h, port, timeout) for h in host]
+        return await asyncio.gather(*tasks)
+    try:
+        beg = time.monotonic()
+        await asyncio.wait_for(asyncio.open_connection(host, port), timeout)
+        return (time.monotonic() - beg) * 1E3
+    except:
+        return None
+
+
+def tcp_ping(host, port, timeout=1):
+    ms = asyncio.run(aio_tcp_ping(host, port, timeout))
+    if not isinstance(host, list):
+        return {host: ms}
+    ping = {host[i]: ms[i] for i in range(len(host))}
+    return dict(sorted(ping.items(), key=lambda x: x[1] or 1E9))
 
 
 if __name__ == '__main__':
