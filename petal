@@ -45,7 +45,6 @@ Usage: petal <command> [args ...]\n
        petal show [options] [env]
              -a, --all       show all packages
              -d, --deep      show packages in base environment(s)
-             -s, --source    show package source
              -v, --version   show package version
 
     Environment delivery
@@ -242,7 +241,6 @@ class Petal(ColorMaker):
         args = [x for x in args if not x.startswith('-')]
         show_version = '-v' in opts or '--version' in opts
         deep = '-d' in opts or '--deep' in opts
-        show_src = '-s' in opts or '--source' in opts
         show_all = '-a' in opts or '--all' in opts
 
         # find the env we're working on
@@ -273,12 +271,8 @@ class Petal(ColorMaker):
                 line += f' {self._ver(pkg.version)}'
             if not pkg.native:
                 line += f' [{tilde_path(pkg.env)}]'
-            if show_src:
-                if not xpkg.src:
-                    src = '(added)'
-                else:
-                    src = f'(included from {tilde_path(xpkg.src)})'
-                line += f' {self._c(src)}'
+            if xpkg.src:
+                line += f' (included from {tilde_path(xpkg.src)})'
             log(line)
             if show_all:
                 for p, level in pkgs.walk(name):
@@ -417,7 +411,7 @@ class Petal(ColorMaker):
             if dryrun:
                 msg += f'[{env}] plan to delist {self._pkg(delist)}'
             else:
-                msg += f'[{env}] delist {self._pkg(delist)} from explicit set'
+                msg += f'[{env}] delist {self._pkg(delist)} from explicits'
         elif not dryrun and delist:
             msg += f'[{env}] ignore {self._pkg(delist)}'
 
@@ -876,6 +870,8 @@ class XRequired:
                 if not include.exists():
                     continue
                 relpath = os.path.relpath(include.resolve(), self.pwd)
+                if not relpath.startswith('./'):
+                    relpath = f'./{relpath}'
                 inc = XRequired(read_lines(include), src=relpath)
                 for name, xpkg in inc.pkgs.items():
                     if name not in self.pkgs:
