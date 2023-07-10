@@ -10,7 +10,6 @@ import tempfile
 import subprocess
 import urllib.request
 from pathlib import Path
-from collections.abc import Iterable
 from contextlib import suppress, contextmanager
 
 # exclude dist-packages, make sure only std libraries are used
@@ -33,11 +32,8 @@ PYPI_SOURCES = ['pypi.org',
 def die_usage():
     print("""
 Usage: petal <command> [args ...]\n
-    Environment creation or recovery
+    Environment creation, recovery, and synchronization
        petal make [env] [with /usr/bin/python3] [over|on base_env ...]
-
-    Environment clean up
-       petal clean env
 
     Environment inspection
        petal show [options] [env]
@@ -45,8 +41,11 @@ Usage: petal <command> [args ...]\n
              -d, --deep      show packages in base environment(s)
              -v, --version   show package version
 
+    Environment clean up
+       petal clean <env>
+
     Environment delivery
-       petal deliver env [to] destination
+       petal deliver <env> [to] <destination>
 
     Package install
        petal add <pip install params ...> [to env]
@@ -54,7 +53,7 @@ Usage: petal <command> [args ...]\n
              alias of add command: install
 
     Package removal
-       petal del package ... [from env]
+       petal del <package> ... [from env]
              aliases of del command: remove, uninstall
 
     Package upgrade
@@ -162,8 +161,14 @@ class Petal(ColorMaker):
         else:
             if len(args) > 1:
                 die_usage()
-            self.env_build(env_dir)
-            self.env_restore(env_dir)
+            env_ready = True
+            try:
+                env = PetalEnv(env_dir)
+            except:
+                env_ready = False
+            if not env_ready:
+                self.env_build(env_dir, restore=True)
+            self.env_restore(env_dir, restore=True)
 
 
     def cmd_clean(self, args):
@@ -189,7 +194,7 @@ class Petal(ColorMaker):
 
 
     def cmd_deliver(self, args):
-        "Copy env with packages in its bases to a new directory."
+        "Copy env with packages in all base env(s) to a new directory."
 
         # parse args
         if len(args) == 3:
@@ -223,7 +228,7 @@ class Petal(ColorMaker):
 
 
     def cmd_show(self, args):
-        "Show installed packages."
+        "List installed packages."
 
         opts = [x for x in args if x.startswith('-')]
         args = [x for x in args if not x.startswith('-')]
@@ -510,7 +515,7 @@ class Petal(ColorMaker):
         log(msg)
 
 
-    def env_build(self, path):
+    def env_build(self, path, *, restore=False):
         "Build a petal environment from existing specs."
 
         env = Path(path)
@@ -535,16 +540,16 @@ class Petal(ColorMaker):
         for f in ['pyvenv.cfg', 'bin', 'lib']:
             if (env / f).exists():
                 env = env.resolve()
-                log(f'{self._env(env)} seems ready'
-                    f' (found {self._url(env / f)})')
+                log(f'{self._env(env)} seems ready')
                 return
 
         self.create_pep405(env)
         self.install_layers_hack(env)
-        log(f'environment {self._env(env)} made with {self._c(self.python)}')
+        act = restore and 'rebuilt' or 'made'
+        log(f'environment {self._env(env)} {act} with {self._c(self.python)}')
 
 
-    def env_restore(self, path):
+    def env_restore(self, path, *, restore=False):
         "Restore packages in a petal environment."
 
         env = isinstance(path, PetalEnv) and path or PetalEnv(path)
@@ -554,7 +559,8 @@ class Petal(ColorMaker):
 
         freeze_empty = os.stat(freeze).st_size == 0
         if freeze_empty:
-            log(f'{freeze} seems empty')
+            if not restore:
+                log(f'{freeze} seems empty')
             return
 
         lib_empty = not any(True for p in env.site_path.iterdir())
@@ -630,11 +636,10 @@ class Petal(ColorMaker):
 
 
     def _run_pip(self, cmd, dry=False, *, env=None):
-        run = dry and 'plan to run ' or 'run '
         if not env:
             env = {'PETAL_USE_CORE': '1'}
         env_str = ' '.join(f'{key}={val}' for key, val in env.items())
-        log(run, self._url(f'{env_str} ' + tilde_path(' '.join(cmd))))
+        log(self._url(f'{env_str} ' + ' '.join(tilde_path(x) for x in cmd)))
         if dry:
             return
         code = os_run(cmd, **env)
@@ -926,8 +931,12 @@ class PetalEnv(ColorMaker):
     def __init__(self, path):
         super().__init__()
         self.path = Path(path).expanduser().resolve()
+        env_str = self._y(tilde_path(path))
         if not (self.path / 'pyvenv.cfg').is_file():
-            die(f'Invalid env {self._y(path)}')
+            raise RuntimeError(f'Invalid env {env_str}')
+        for d in ['bin', 'lib']:
+            if not (self.path / d).is_dir():
+                raise FileNotFoundError(f'Broken env {env_str}: {d} not found')
         self.cfg = {}
         with suppress(FileNotFoundError):
             with open(self.path / 'petal.json') as f:
