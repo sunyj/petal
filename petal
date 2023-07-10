@@ -257,7 +257,7 @@ class Petal(ColorMaker):
                 line = f'* {name} [{tilde_path(p.env)}]'
             return prefix + line
 
-        explicits = env.explicit_packages(deep=deep)
+        explicits = env.explicits(deep=deep)
         if not explicits:
             die('empty env')
 
@@ -309,7 +309,7 @@ class Petal(ColorMaker):
         pip_opts, wanted_specs = env.split_install_args(args)
         installed_pkgs = env.list_installed(deep=False)
         installed = set(pkg.name for pkg in installed_pkgs)
-        wanted = XRequired(wanted_specs)
+        wanted = Explicits(wanted_specs)
         if not wanted:
             die('no package to install')
 
@@ -318,7 +318,7 @@ class Petal(ColorMaker):
 
         # handle promotion: package installed but not in the explicit set
         if not new:
-            explicits = set(p.name for p in env.explicit_packages())
+            explicits = set(p.name for p in env.explicits())
             selected = [p for p in wanted.names if p not in explicits]
             if selected:
                 if dryrun:
@@ -354,7 +354,7 @@ class Petal(ColorMaker):
 
         # installed packages set
         iset = PackageSet(env)
-        explicits = env.explicit_packages()
+        explicits = env.explicits()
         installed = set(p.name for p in explicits if p.src is None)
         excludes  = set(p.name for p in explicits if p.src is not None)
 
@@ -851,7 +851,7 @@ class XPackage:
     def __repr__(self): return str(self)
 
 
-class XRequired:
+class Explicits:
     "Explicitly required packages."
 
     def __init__(self, specs=[], *, src=None, pwd=None):
@@ -872,7 +872,7 @@ class XRequired:
                 relpath = os.path.relpath(include.resolve(), self.pwd)
                 if not relpath.startswith('./'):
                     relpath = f'./{relpath}'
-                inc = XRequired(read_lines(include), src=relpath)
+                inc = Explicits(read_lines(include), src=relpath)
                 for name, xpkg in inc.pkgs.items():
                     if name not in self.pkgs:
                         self.pkgs[name] = xpkg
@@ -950,10 +950,10 @@ class PetalEnv(ColorMaker):
         bases = []
         if self.cfg:
             self.py_version = self.cfg['python']
-            self.require = XRequired(self.cfg['require'], pwd=self.path.parent)
+            self.require = Explicits(self.cfg['require'], pwd=self.path.parent)
             bases = self.cfg.get('bases', [])
         else:
-            self.require = XRequired(pwd=self.path.parent)
+            self.require = Explicits(pwd=self.path.parent)
             if (self.path / INSTALL_SPEC_CACHE).exists():
                 self.is_core = True
                 self.py_version = grep(r'^python(\d.+)$', self.path.name)
@@ -1026,13 +1026,13 @@ class PetalEnv(ColorMaker):
                         dirs_exist_ok=True)
 
 
-    def explicit_packages(self, deep=False):
+    def explicits(self, deep=False):
         "Explicit packages."
 
         pkgs = self.require.full
         if deep:
             for layer in self.layers:
-                pkgs += layer.explicit_packages(deep=True)
+                pkgs += layer.explicits(deep=True)
         return pkgs
 
 
@@ -1085,7 +1085,7 @@ class PetalEnv(ColorMaker):
     def list_installed(self, deep=True):
         # get extras info for more acurate dependencies
         lut = {}
-        for p in self.explicit_packages(deep=deep):
+        for p in self.explicits(deep=deep):
             mo = re.search(r'\[(.+)\]', p.spec)
             if mo:
                 lut[p.name] = [x.strip() for x in mo.group(1).split(',')]
@@ -1186,7 +1186,7 @@ class PetalEnv(ColorMaker):
 
     def update_require(self, req, freeze=True):
         self.cfg['require'] = req
-        self.require = XRequired(req, pwd=self.path.parent)
+        self.require = Explicits(req, pwd=self.path.parent)
         dump_json(self.conf_file, self.cfg)
         if freeze:
             self.freeze()
