@@ -36,10 +36,8 @@ Usage: petal <command> [args ...]\n
     Environment creation or recovery
        petal make [env] [with /usr/bin/python3] [over|on base_env ...]
 
-    Environment rebuild
-       petal rebuild [options] env
-             -c, --clean     clean the env only
-             -s, --scratch   rebuild from scrach, implies --clean
+    Environment clean up
+       petal clean env
 
     Environment inspection
        petal show [options] [env]
@@ -168,36 +166,26 @@ class Petal(ColorMaker):
             self.env_restore(env_dir)
 
 
-    def cmd_rebuild(self, args):
-        "Rebuild env."
+    def cmd_clean(self, args):
+        "Clean up env."
 
-        opts = [x for x in args if x.startswith('-')]
-        args = [x for x in args if not x.startswith('-')]
         if len(args) != 1:
             die_usage()
-        clean_only   = '-c' in opts or '--clean' in opts
-        from_scratch = '-s' in opts or '--scratch' in opts
         env_dir = Path(args[0])
 
-        # delete everything
-        if from_scratch or clean_only:
-            git_ignored = read_lines(env_dir / '.gitignore')
-            excluded = set(x[1:] for x in git_ignored if x.startswith('!'))
-            for d in env_dir.iterdir():
-                if d.name not in excluded:
-                    if d.is_dir():
-                        shutil.rmtree(d, ignore_errors=True)
-                    else:
-                        os.unlink(d)
-            log(f'{env_dir} cleaned up')
-
-        if from_scratch:
-            self.env_build(env_dir)
-
-        if not clean_only:
-            env = PetalEnv(env_dir)
-            self._run_pip(env.pip('install', env.require.specs))
-            env.freeze()
+        # delete everything except git ignored
+        git_ignored = read_lines(env_dir / '.gitignore')
+        excluded = set(x[1:] for x in git_ignored if x.startswith('!'))
+        items = [d for d in env_dir.iterdir() if d.name not in excluded]
+        if not items:
+            log(f'{self._env(env_dir)} seems cleaned already')
+            return
+        for item in items:
+            if item.is_dir():
+                shutil.rmtree(item, ignore_errors=True)
+            else:
+                os.unlink(item)
+        log(f'{self._env(env_dir)} cleaned up')
 
 
     def cmd_deliver(self, args):
@@ -939,7 +927,7 @@ class PetalEnv(ColorMaker):
         super().__init__()
         self.path = Path(path).expanduser().resolve()
         if not (self.path / 'pyvenv.cfg').is_file():
-            die(f'invalid env {path}')
+            die(f'Invalid env {self._y(path)}')
         self.cfg = {}
         with suppress(FileNotFoundError):
             with open(self.path / 'petal.json') as f:
