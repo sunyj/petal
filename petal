@@ -49,18 +49,25 @@ Usage: petal <command> [args ...]\n
 
     Package install
        petal add <pip install params ...> [to env]
-       petal add ../another/package_list [to env]
-             alias of add command: install
 
     Package removal
        petal del <package> ... [from env]
-             aliases of del command: remove, uninstall
 
     Package upgrade
        petal upgrade <package ... | all | pip> [in env]
 
     Package action plan
        petal plan add | del | upgrade ... [on env]
+
+    Command aliases:
+
+       +-----------+---------+
+       | alias     | command |
+       |-----------+---------|
+       | install   | add     |
+       | uninstall | del     |
+       | remove    | del     |
+       +-----------+---------+
 """.strip())
     sys.exit(1)
 
@@ -244,11 +251,7 @@ class Petal(ColorMaker):
             name = p.disp
             if show_version:
                 name += f' {self._ver(p.version)}'
-            if p.native:
-                line = f'{sign} {name}'
-            else:
-                line = f'* {name} [{tilde_path(p.env)}]'
-            return prefix + line
+            return f'{prefix}{sign} {name}'
 
         explicits = env.explicits(deep=deep)
         if not explicits:
@@ -259,13 +262,12 @@ class Petal(ColorMaker):
         for xpkg in explicits:
             name = xpkg.name
             pkg = pkgs[name]
-            line = (pkg.native and '+ ' or '* ') + self._pkg(xpkg.spec)
+            line = f'- {self._pkg(xpkg.spec)}'
             if show_version:
                 line += f' {self._ver(pkg.version)}'
             if not pkg.native:
-                line += f' [{tilde_path(pkg.env)}]'
-            if xpkg.src:
-                line += f' (included from {tilde_path(xpkg.src)})'
+                relpath = os.path.relpath(pkg.env, env.path)
+                line += f' from {self._env(relpath)}'
             log(line)
             if show_all:
                 for p, level in pkgs.walk(name):
@@ -300,13 +302,12 @@ class Petal(ColorMaker):
 
         # get requested packages from command line
         pip_opts, wanted_specs = env.split_install_args(args)
-        installed_pkgs = env.list_installed(deep=False)
-        installed = set(pkg.name for pkg in installed_pkgs)
         wanted = Explicits(wanted_specs)
         if not wanted:
             die('no package to install')
 
         # filter out installed packages with version specs removed
+        installed = set(pkg.name for pkg in env.list_installed(deep=False))
         new = [p for p in wanted.names if p not in installed]
 
         # handle promotion: package installed but not in the explicit set
@@ -348,8 +349,7 @@ class Petal(ColorMaker):
         # installed packages set
         iset = PackageSet(env)
         explicits = env.explicits()
-        installed = set(p.name for p in explicits if p.src is None)
-        excludes  = set(p.name for p in explicits if p.src is not None)
+        installed = set(p.name for p in explicits)
 
         # find collateral packages (dependencies) to remove
         wanted = [p.lower() for p in args]
@@ -357,15 +357,6 @@ class Petal(ColorMaker):
         if unknwon:
             warn = self._r('unknown packages')
             die(f'[{env}] {warn}: {self._pkg(unknwon)}')
-
-        # prevent removing packages from include entries
-        excluded = [p for p in explicits
-                    if p.src is not None and p.name in wanted]
-        if excluded:
-            log('NOT removing included packages:')
-            for xpkg in excluded:
-                log(f'  {self._pkg(xpkg.name)}: {self._c(xpkg.src)}')
-        wanted = [p for p in wanted if p not in excludes]
 
         # allow delisting packages without uninstalling them
         wanted_set = set(wanted)
@@ -813,11 +804,10 @@ class PackageSet:
 
 
 class XPackage:
-    "Explicit package: package with explicit source."
+    "Explicit package."
 
-    def __init__(self, spec, src=None):
+    def __init__(self, spec):
         self._spec = spec
-        self.src = str(src) if src else None
 
 
     @property
@@ -830,54 +820,24 @@ class XPackage:
         return self._spec
 
 
-    @property
-    def native(self):
-        return not self.src
-
-
-    def __str__(self):
-        spec = self._spec
-        if self.src:
-            spec += f' (from {str(self.src)})'
-        return spec
-
-    def __repr__(self): return str(self)
+    def __str__(self): return self._spec
+    def __repr__(self): return self._spec
 
 
 class Explicits:
     "Explicitly required packages."
 
-    def __init__(self, specs=[], *, src=None, pwd=None):
+    def __init__(self, specs=[], *, pwd=None):
         self.lines = []
         self.pkgs = {}
-        self.src = src
-        if self.src is None:
-            self.pwd = pwd if pwd else Path(os.getcwd())
-        else:
-            self.pwd = Path(self.src).parent.resolve()
+        self.pwd = pwd or Path(os.getcwd())
         for spec in specs:
             if not isinstance(spec, str) or not spec:
                 continue
-            if is_include(spec):
-                include = self.pwd / Path(spec)
-                if not include.exists():
-                    continue
-                relpath = os.path.relpath(include.resolve(), self.pwd)
-                if not relpath.startswith('./'):
-                    relpath = f'./{relpath}'
-                inc = Explicits(read_lines(include), src=relpath)
-                for name, xpkg in inc.pkgs.items():
-                    if name not in self.pkgs:
-                        self.pkgs[name] = xpkg
-                line = spec
-                if not line.startswith('.'):
-                    line = tilde_path(include.resolve())
-                self.lines.append(line)
-            else:
-                self.lines.append(spec)
-                name = pkg_name(spec)
-                if name not in self.pkgs:
-                    self.pkgs[name] = XPackage(spec, self.src)
+            self.lines.append(spec)
+            name = pkg_name(spec)
+            if name not in self.pkgs:
+                self.pkgs[name] = XPackage(spec)
 
 
     def __bool__(self):
@@ -904,13 +864,7 @@ class Explicits:
 
     @property
     def lut(self):
-        lut = {}
-        for name, pkg in self.pkgs.items():
-            if pkg.native:
-                lut[name] = pkg.spec
-            else:
-                lut[pkg.src] = pkg.src
-        return lut
+        return {name: pkg.spec for name, pkg in self.pkgs.items()}
 
 
     @property
@@ -919,8 +873,7 @@ class Explicits:
 
 
     def filter(self, names):
-        self.lines = [line for line in self.lines
-                      if is_include(line) or pkg_name(line) in names]
+        self.lines = [line for line in self.lines if pkg_name(line) in names]
         self.pkgs = {k: v for k, v in self.pkgs.items() if k in names}
         return self
 

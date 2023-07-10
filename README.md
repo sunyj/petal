@@ -155,10 +155,6 @@ Petal env's explicit requirements and their dependencies form the structure of t
 
 Slogan candidate: "Focus on what you want, let petal handle the rest."
 
-### Package File Inclusion
-
-When `<pkg>` in command `petal add <pkg>` is a file path, either relative or absolute, the content of that file is used as package specs.  Each line in the file should either be a package spec, or another file inclusion.  Even if the file path is absolute, it is computed and saved as the relative path to env's directory.
-
 ### Plan Before Change
 
 You can prepend `plan` to `add`, `del`, and `upgrade` commands to check what petal plans for these change actions before you really perform them.
