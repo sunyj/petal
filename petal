@@ -96,8 +96,7 @@ class Petal(ColorMaker):
 
     @property
     def user_site(self):
-        return re.sub(r'^.+/(lib.+/site-packages)$', r'\1',
-                      check_output(f'{self.python} -m site --user-site'))
+        return f'lib/python{self.py_version}/site-packages'
 
 
     @property
