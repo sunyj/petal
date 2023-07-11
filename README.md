@@ -27,6 +27,7 @@ Petal uses pip, not just wraps it up.  Its distinctive features include:
   - PEP 405 is built-in since Python 3.3.
   - pip is bootstrapped from the fastest PyPI mirror automatically.
 
+
 ### `pip freeze` with `requirements.txt` is already an EaC solution, isn't it?
 
 It is, but not quite so. `requirements.txt` is only a **flat list** of installed packages, without any dependency information.  Petal not only knows which packages you ***need***, it also knows, and in fact focuses on, which packages you ***want***.
@@ -81,7 +82,7 @@ petal make myenv with /path/to/my/python
 git add myenv
 ```
 
-## Layered Env
+## Env Layers
 
 Petal can make a new env "on top" of other envs.  These envs are called the ***base envs***, or bases in short.
 
@@ -176,6 +177,37 @@ Env delivery is as simple as putting an elephant into a fridge, with only two st
 
 1. Create a clean PEP 405 destination env without any petal hacks.
 2. Copy all the packages from the source to the destination, including those in the base env(s), recursively.
+
+# The Hacks
+
+Petal is the fruit that grows out of a tree of experimental projects I occasionally fiddled with over the last two years. I used them in almost all my Python projects and feel quite satisfied. I am grateful for Python, its powerful standard library, and its persistence in pursuit of elegant designs.  Technical choices with implementation details are explained in the following sections.
+
+## Layered Virtual Environment
+
+Two files, `_petal_layers.py` and `petal-layers.pth`, are written to site library path on creation of a new petal env.  It utilizes Python's [path configuration hook](https://docs.python.org/3/library/site.html#) to append entries to `sys.path` according to metadata in  `<env>/petal.json`, recursively.  Please refer to `install_layers_hack` method in the source code for more details.
+
+## How is pip used in petal?
+
+If Python's path configuration hook is the first enabling technology of petal, then pip as a zero-dependency and runnable module is the second. Under the layer mechanism, petal can install pip module in the bottom-most, so-called "core env", which is shared by all petal envs using the same Python minor version.  The core env, or the "pip layer", is only visible to upper layers when the environment variable `PETAL_USE_CORE` is non-empty.
+
+The initial installation of the pip module, which is conventionally called bootstrapping, is done by downloading the latest wheel distribution from PyPI, and installing it directly with Python's [`zipimport`](https://docs.python.org/3/library/zipimport.html) feature.  Two popular PyPI mirrors in the mainland China area is added to the mirrors list along with the main site.  Trial connections are made in parallel (with `asyncio`) to all mirror sites before every bootstrapping, and the one with minimum latency is chosen.
+
+Petal uses pip in two ways:  `pip` command execution and package dependency inquiry.  Module `pip._internal.metadata.pkg_resources` is imported to list installed packages with their dependencies.  Read the source code of `PetalEnv` class for more details.
+
+## Package management delegation
+
+All actual package changing (add, del, upgrade) actions are performed by `pip` command, using the pip module in the core env.  All `pip install` command switches are supported.
+
+## Command Aliases
+
+Petal is sophisticated, not complicated, while petal's commands are designed to be simple and expressive.  To be compatible with traditional command naming, petal supports several command aliases.
+
+| Alias             | Command         |
+| ----------------- | --------------- |
+| `petal install`   | `petal add`     |
+| `petal uninstall` | `petal del`     |
+| `petal remove`    | `petal del`     |
+| `petal copy`      | `petal deliver` |
 
 # Limitations
 
