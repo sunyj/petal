@@ -21,6 +21,7 @@ INSTALL_SPEC_CACHE = 'install-command-spec.json'
 CMD_ALIASES = {'install': 'add',
                'remove': 'del',
                'uninstall': 'del',
+               'copy': 'deliver',
                }
 
 PYPI_SOURCES = ['pypi.org',
@@ -37,8 +38,7 @@ Usage: petal <command> [args ...]\n
 
     Environment inspection
        petal show [options] [env]
-             -a, --all       show all packages
-             -d, --deep      show packages in base environment(s)
+             -a, --all       show all packages (non-explicits)
              -v, --version   show package version
 
     Environment clean up
@@ -59,14 +59,14 @@ Usage: petal <command> [args ...]\n
     Package action plan
        petal plan add | del | upgrade ... [on env]
 
-    Command aliases:
-
+    Command aliases
        +-----------+---------+
        | alias     | command |
        |-----------+---------|
        | install   | add     |
        | uninstall | del     |
        | remove    | del     |
+       | copy      | deliver |
        +-----------+---------+
 """.strip())
     sys.exit(1)
@@ -240,7 +240,6 @@ class Petal(ColorMaker):
         opts = [x for x in args if x.startswith('-')]
         args = [x for x in args if not x.startswith('-')]
         show_version = '-v' in opts or '--version' in opts
-        deep = '-d' in opts or '--deep' in opts
         show_all = '-a' in opts or '--all' in opts
 
         # find the env we're working on
@@ -253,7 +252,7 @@ class Petal(ColorMaker):
                 name += f' {self._ver(p.version)}'
             return f'{prefix}{sign} {name}'
 
-        explicits = env.explicits(deep=deep)
+        explicits = env.explicits(deep=True)
         if not explicits:
             die('empty env')
 

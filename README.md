@@ -163,13 +163,14 @@ You can prepend `plan` to `add`, `del`, and `upgrade` commands to check what pet
 
 `petal show [env]` prints the aforementioned structure of the env.  By default, only explicit and native packages are listed.  `petal show` command supports these options:
 
-- `-a`, `--all`: show all packages in env.
-- `-d`, `--deep`: show packages in all base envs.
-- `-v`, `--version`: show package version.
+- `-a`, `--all`: show all packages in env, not just explicits.
+- `-v`, `--version`: show packages' versions.
 
 ## Env Delivery
 
-Although petal claims to create and maintain standard PEP 405 virtual environments, as we mentioned earlier, petal has to make some hacks to the environment to support EaC and layered env.  Besides, in a multi-layer setup, packages may be installed in different layers, and that's not the most friendly to application delivery.  In fact, virtual env based Python application delivery is an important driving factor behind petal and its predecessors.
+Although petal claims to create and maintain standard PEP 405 virtual environments, as we mentioned earlier, petal has to make some hacks to the environment to support EaC and layered env.  Besides, in a multi-layer setup, packages may be installed in different layers.  All these facts are not the most friendly to application delivery.
+
+In fact, virtual env based Python application delivery is an important driving factor behind petal and its predecessors.  While env delivery is usually not exactly application delivery, it is always a crucial part.  To that end, petal provides the `deliver` command to facilitate the delivery of applications developed in petal environments.
 
 Env delivery is as simple as putting an elephant into a fridge, with only two steps:
 
@@ -180,5 +181,4 @@ Env delivery is as simple as putting an elephant into a fridge, with only two st
 
 - Only tested on Linux with Python 3.8.
 - Should work on MacOS, but no extensive tests yet.
-- Highly unlikely to work properly on Windows for now.  However, as petal only uses the standard library, it should not be too difficult to make it.
-
+- Unlikely to work properly on Windows for now, but should be fairly easy to make it work as petal only uses the standard library.
