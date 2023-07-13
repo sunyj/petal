@@ -54,7 +54,7 @@ Suppose you're working on a application that requires some large packages (such 
 
 # A Solution
 
-Following UNIX's golden "do one thing and do it well" philosophy, both pip and PEP 405 are great tools with great implementation.  PEP 405 can make a perfectly isolated virtual environment, to which [pip installs packages](https://ianbicking.org/blog/2008/10/pyinstall-is-dead-long-live-pip.html).  An environment without packages is useless; Packages beyond an isolated environment are clueless.  How to make them work together is a long quest for the community.
+Following UNIX's golden "do one thing and do it well" philosophy, both pip and PEP 405 are great tools with great implementation.  PEP 405 can make a perfectly isolated virtual environment, to which [pip installs packages](https://ianbicking.org/blog/2008/10/pyinstall-is-dead-long-live-pip.html).  An environment without packages is useless; Packages beyond an isolated environment are clueless.  How to make them work together has been a long quest for the community.
 
 Inspired by another UNIX philosophy: "make programs work together", we don't need a replacement for pip; We need a tool that makes good use of this important asset of the Python community and provides developers with a new level of abstraction: environment management.
 
@@ -180,17 +180,17 @@ Env delivery is as simple as putting an elephant into a fridge, with only two st
 
 # The Hacks
 
-Petal is the fruit that grows out of a tree of experimental projects I occasionally fiddled with over the last two years. I used them in almost all my Python projects and feel quite satisfied. I am grateful for Python, its powerful standard library, and its persistence in pursuit of elegant designs.  Technical choices with implementation details are explained in the following sections.
+Petal is the fruit that grows out of a tree of experimental projects I occasionally fiddled with over the last two years (2022-23). I used them in almost all my Python projects and feel quite satisfied. I am grateful for Python, its powerful standard library, and its persistence in pursuit of elegant designs.  Petal's technical choices and implementation details are explained in the following sections.
 
 ## Layered Virtual Environment
 
-Two files, `_petal_layers.py` and `petal-layers.pth`, are written to site library path on creation of a new petal env.  It utilizes Python's [path configuration hook](https://docs.python.org/3/library/site.html#) to append entries to `sys.path` according to metadata in  `<env>/petal.json`, recursively.  Please refer to `install_layers_hack` method in the source code for more details.
+Two files, `_petal_layers.py` and `petal-layers.pth`, are created in the site library path on creation of a new petal env.  It utilizes Python's [path configuration hook](https://docs.python.org/3/library/site.html#) to append entries to `sys.path` according to metadata in  `<env>/petal.json`, recursively.  Please refer to `install_layers_hack` method in the source code for more details.
 
 ## How is pip used in petal?
 
-If Python's path configuration hook is the first enabling technology of petal, then pip as a zero-dependency and runnable module is the second. Under the layer mechanism, petal can install pip module in the bottom-most, so-called "core env", which is shared by all petal envs using the same Python minor version.  The core env, or the "pip layer", is only visible to upper layers when the environment variable `PETAL_USE_CORE` is non-empty.
+If Python's path configuration hook is the first enabling technology of petal, then pip as a zero-dependency and runnable module is the second. Under the layered env mechanism, petal can install pip module in the bottom-most, so-called "core env", which is shared by all petal envs using the same Python minor version.  The core env, or the "pip layer", is only visible to upper layers when the environment variable `PETAL_USE_CORE` is non-empty.
 
-The initial installation of the pip module, which is conventionally called bootstrapping, is done by downloading the latest wheel distribution from PyPI, and installing it directly with Python's [`zipimport`](https://docs.python.org/3/library/zipimport.html) feature.  Two popular PyPI mirrors in the mainland China area is added to the mirrors list along with the main site.  Trial connections are made in parallel (with `asyncio`) to all mirror sites before every bootstrapping, and the one with minimum latency is chosen.
+The initial installation of the pip module, which is conventionally called bootstrapping, is done by downloading its latest wheel distribution from PyPI, and installing it directly with Python's [`zipimport`](https://docs.python.org/3/library/zipimport.html) feature.  Two popular PyPI mirrors in mainland China area is added to the mirrors list along with the main site.  Trial connections are made in parallel (with [`asyncio`](https://docs.python.org/3/library/asyncio.html)) to all mirror sites before every bootstrapping, and the one with minimum TCP connection latency is chosen.
 
 Petal uses pip in two ways:  `pip` command execution and package dependency inquiry.  Module `pip._internal.metadata.pkg_resources` is imported to list installed packages with their dependencies.  Read the source code of `PetalEnv` class for more details.
 
@@ -200,7 +200,7 @@ All actual package changing (add, del, upgrade) actions are performed by `pip` c
 
 ## Command Aliases
 
-Petal is sophisticated, not complicated, while petal's commands are designed to be simple and expressive.  To be compatible with traditional command naming, petal supports several command aliases.
+Petal is sophisticated, not complicated, and I want to deliver that message through a lucid command line design.  A side effect of this design is the convenience to support command aliases.  To honor traditional command naming conventions, petal supports these command aliases.
 
 | Alias             | Command         |
 | ----------------- | --------------- |
