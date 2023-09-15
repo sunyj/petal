@@ -54,7 +54,8 @@ Usage: petal <command> [args ...]\n
        petal del <package> ... [from env]
 
     Package upgrade
-       petal upgrade <package ... | all | pip> [in env]
+       petal upgrade [options] <package ... | all | pip> [in env]
+             -e, --eager     upgrade dependencies to latest possible version.
 
     Package action plan
        petal plan add | del | upgrade ... [on env]
@@ -411,6 +412,12 @@ class Petal(ColorMaker):
     def cmd_upgrade(self, args, dryrun=False):
         "Upgrade packages."
 
+        opts = [x for x in args if x.startswith('-')]
+        args = [x for x in args if not x.startswith('-')]
+        eager = '-e' in opts or '--eager' in opts
+
+        # --upgrade-strategy=eager
+
         # find the env we're working on
         if len(args) > 2 and args[-2] == 'in':
             env = PetalEnv(args[-1])
@@ -419,8 +426,9 @@ class Petal(ColorMaker):
             env = self.default_env
 
         specs = args
+        upgrade_opts = eager and ['-U', '--upgrade-strategy=eager'] or ['-U']
         if specs == ['pip']:
-            pip_cmd = env.core.pip('install', ['-U' , 'pip'])
+            pip_cmd = env.core.pip('install', upgrade_opts + ['pip'])
         else:
             if not specs or specs == ['all']:
                 specs = env.require.specs
@@ -429,7 +437,7 @@ class Petal(ColorMaker):
             if not specs:
                 log('nothing to upgrade')
                 return
-            pip_cmd = env.pip('install', ['-U'] + specs)
+            pip_cmd = env.pip('install', upgrade_opts + specs)
         self._run_pip(pip_cmd, dry=dryrun)
 
         if not dryrun:
