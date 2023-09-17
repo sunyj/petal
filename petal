@@ -11,6 +11,7 @@ import subprocess
 import urllib.request
 from pathlib import Path
 from contextlib import suppress, contextmanager
+from collections import defaultdict
 
 # exclude dist-packages, make sure only std libraries are used
 sys.path = [p for p in sys.path if not re.search(r'/dist-packages$', p)]
@@ -1045,19 +1046,22 @@ class PetalEnv(ColorMaker):
 
 
     def list_installed(self, deep=True):
-        # get extras info for more acurate dependencies
-        lut = {}
+        # acurate dependencies requires extras, build a lut for it
+        extras = defaultdict(set)
         for p in self.explicits(deep=deep):
             mo = re.search(r'\[(.+)\]', p.spec)
             if mo:
-                lut[p.name] = [x.strip() for x in mo.group(1).split(',')]
+                extras[p.name] = {x.strip() for x in mo.group(1).split(',')}
         # list all installed packages
         with self.core.tapped():
             from pip._internal.metadata import pkg_resources as pkgres
             e = pkgres.Environment.from_paths(self.paths(include_core=False))
-            dists = e.iter_installed_distributions()
-            pkgs = [Package(d._dist, lut.get(d._dist.project_name.lower(), []))
-                    for d in dists]
+            # expand extras lut
+            for d in e.iter_installed_distributions():
+                for p in d.iter_dependencies():
+                    extras[p.key] |= set(p.extras)
+            pkgs = [Package(d._dist, list(extras.get(d._dist.key, {})))
+                    for d in e.iter_installed_distributions()]
         if deep:
             return pkgs
         return [p for p in pkgs if p.env == str(self.path)]
