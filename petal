@@ -10,8 +10,8 @@ import tempfile
 import subprocess
 import urllib.request
 from pathlib import Path
-from contextlib import suppress, contextmanager
 from collections import defaultdict
+from contextlib import suppress, contextmanager
 
 # exclude dist-packages, make sure only std libraries are used
 sys.path = [p for p in sys.path if not re.search(r'/dist-packages$', p)]
@@ -62,14 +62,14 @@ Usage: petal <command> [args ...]\n
        petal plan add | del | upgrade ... [on env]
 
     Command aliases
-       +-----------+---------+
-       | alias     | command |
-       |-----------+---------|
-       | install   | add     |
-       | uninstall | del     |
-       | remove    | del     |
-       | copy      | deliver |
-       +-----------+---------+
+       +--------------+--------------+
+       | alias        | command      |
+       +--------------+--------------+
+       | install      | add          |
+       | uninstall    | del          |
+       | remove       | del          |
+       | copy         | deliver      |
+       +--------------+--------------+
 """.strip())
     sys.exit(1)
 
@@ -1137,7 +1137,7 @@ class PetalEnv(ColorMaker):
             return
         specs = self.require.lut
         for p in pkg_specs:
-            specs[is_include(p) and p or pkg_name(p)] = p
+            specs[pkg_name(p)] = p
         self.update_require(list(specs.values()), freeze)
 
 
@@ -1274,10 +1274,6 @@ def os_run(cmd, **env):
         return subprocess.call(cmd, env=env_vars)
     else:
         return subprocess.call(cmd)
-
-
-def is_include(path):
-    return re.match(r'^[~/.]', str(path)) is not None
 
 
 def tilde_path(path):
