@@ -6,9 +6,36 @@ The name comes from an anagram of letters `L`, `A` (from layered), `P` (from Pyt
 
 ## Quick Start
 
-1. Download or clone `petal`.  It's one single Python script.
+1. Download latest [petal](https://raw.githubusercontent.com/sunyj/petal/master/petal).  It's just a single Python script.
 2. Run it without any command line arguments.  The help page it prints also serves as the complete manual.
 3. Experiment with creating an environment and making changes to it.  Check the structure of your environment with `petal show`.
+
+```
+$ curl -o petal https://raw.githubusercontent.com/sunyj/petal/master/petal
+$ chmod +x petal
+
+$ ./petal make
+download pip 23.2.1 from ... ...
+pip bootstrap done for ~/.cache/petal.py/core/python3.8
+petal core (python3.8) made: ~/.cache/petal.py/core/python3.8
+environment env made on top of [~/.cache/petal.py/core/python3.8] with /usr/bin/python3.8
+
+$ ./petal add pandas
+... ...
+$ ./petal show
+packages in ~/env:
+- pandas
+
+$ ./petal add numpy
+[~/env] promote numpy as explicit
+$ ./petal show
+packages in ~/env:
+- pandas
+- numpy
+
+$ ./petal del pandas
+$ ./petal show -a
+```
 
 ## Fast Q&A
 
@@ -26,19 +53,18 @@ In fact, all actual package operations, such as `install` and `uninstall`, are d
 
 ### Then what's the point of a pip wrapper?
 
-Petal is NOT a wrapper of pip, it uses pip for pckage installation and dependency query.  Its distinctive features include:
+Petal is NOT a wrapper of pip, it leverages pip for pckage installation and dependency query.  Its distinctive features include:
 
-- It is designed to be an environment-as-code (EaC) solution.
-- It manages environments as layers.
-- It supports environment delivery.
-- It's zero-dependency and zero-config.
-  - PEP 405 is built-in since Python 3.3.
-  - pip is automatically bootstrapped from the fastest PyPI mirror with latest version.
+- An environment-as-code (EaC) solution.
+- Manage environments as layers.
+- Automatic removal of unnecessary dependent packages.
+- Environment delivery.
+- Zero-dependency, zero-config.
 
 
 ### `pip freeze` with `requirements.txt` is already an EaC solution, isn't it?
 
-It is, but not entirely. While `requirements.txt` provides a list of installed packages, it lacks the necessary dependency information.  It's like a planar projection of a higher dimensional structure, which is insufficient for proper management of that structure.  In contrast, Petal tracks not only ***what*** packages were installed but also ***why*** you have them installed.
+It is, but not entirely. While `requirements.txt` provides a list of installed packages, it lacks the necessary dependency information.  It is a planar projection of a higher dimensional structure, which is insufficient for proper management of that structure.  In contrast, Petal tracks not only ***what*** packages were installed but also ***why*** you have them installed.
 
 # The Problems
 
