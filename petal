@@ -1,4 +1,5 @@
 #!/usr/bin/python3 -B
+
 import os
 import re
 import sys
@@ -13,22 +14,22 @@ from pathlib import Path
 from collections import defaultdict
 from contextlib import suppress, contextmanager
 
+
 # exclude dist-packages, make sure only std libraries are used
 sys.path = [p for p in sys.path if not re.search(r'/dist-packages$', p)]
 
-
 INSTALL_SPEC_CACHE = 'install-command-spec.json'
 
-CMD_ALIASES = {'install': 'add',
-               'remove': 'del',
-               'uninstall': 'del',
-               'copy': 'deliver',
+CMD_ALIASES  = {'install':   'add',
+                'remove':    'del',
+                'uninstall': 'del',
+                'copy':      'deliver',
                }
 
 PYPI_SOURCES = ['pypi.org',
                 'pypi.doubanio.com',
                 'pypi.tuna.tsinghua.edu.cn',
-                ]
+               ]
 
 
 def die_usage():
@@ -78,8 +79,10 @@ class ColorMaker:
     def __init__(self):
         self.istty = sys.stdout.isatty()
 
+
     def _color(self, color=0):
         return self.istty and (f'\033[{color}m' if color else '\033[0m') or ''
+
 
     def _r(self, txt): return self._color(31) + str(txt) + self._color()
     def _g(self, txt): return self._color(32) + str(txt) + self._color()
@@ -96,30 +99,9 @@ class Petal(ColorMaker):
         self.python = os.path.realpath(sys.executable)
 
 
-    @property
-    def user_site(self):
-        return f'lib/python{self.py_version}/site-packages'
-
-
-    @property
-    def py_version(self):
-        return check_output([self.python, '-c',
-            'import sys; v = sys.version_info; print(f"{v[0]}.{v[1]}")'])
-
-
-    @property
-    def default_env(self):
-        envs = [d for d in Path(os.getcwd()).iterdir()
-                if d.is_dir() and (d / 'pyvenv.cfg').exists()]
-        if not envs:
-            die('No env found!')
-        if len(envs) > 1:
-            die(f'Multiple envs found, you need to choose one from:'
-                f' {self._env(envs)}')
-        return PetalEnv(envs[0])
-
-
     def run(self):
+        "Entry function of petal."
+
         args = sys.argv[1:]
         if not args:
             die_usage()
@@ -132,7 +114,7 @@ class Petal(ColorMaker):
 
 
     def _get_python(self, args):
-        "Parse with clause for python executable, return remaining args."
+        "Parse 'with' clause for python executable; Return remaining args."
 
         if not args or 'with' not in args:
             return args
@@ -423,8 +405,6 @@ class Petal(ColorMaker):
         args = [x for x in args if not x.startswith('-')]
         eager = '-e' in opts or '--eager' in opts
 
-        # --upgrade-strategy=eager
-
         # find the env we're working on
         if len(args) > 2 and args[-2] == 'in':
             env = PetalEnv(args[-1])
@@ -635,11 +615,12 @@ class Petal(ColorMaker):
 
 
     def _ver(self, version):
-        "Version display helper."
         return self._b(str(version))
 
 
     def _run_pip(self, cmd, dry=False, *, env=None):
+        "Run pip command in child process."
+
         if not env:
             env = {'PETAL_USE_CORE': '1'}
         env_str = ' '.join(f'{key}={val}' for key, val in env.items())
@@ -751,6 +732,31 @@ def scan_layers(root=None):
         for layer in layers: scan_layers(layer)
 ################################################################################
 """)
+
+
+    @property
+    def py_version(self):
+        "Version of the env's (NOT this script's) Python."
+
+        return check_output([self.python, '-c',
+            'import sys; v = sys.version_info; print(f"{v[0]}.{v[1]}")'])
+
+
+    @property
+    def user_site(self):
+        return f'lib/python{self.py_version}/site-packages'
+
+
+    @property
+    def default_env(self):
+        envs = [d for d in Path(os.getcwd()).iterdir()
+                if d.is_dir() and (d / 'pyvenv.cfg').exists()]
+        if not envs:
+            die('No env found!')
+        if len(envs) > 1:
+            die(f'Multiple envs found, you need to choose one from:'
+                f' {self._env(envs)}')
+        return PetalEnv(envs[0])
 
 
 class Package:
@@ -970,7 +976,7 @@ class PetalEnv(ColorMaker):
 
     @property
     def site_path(self):
-        "Site Path of this env."
+        "Site path of this env."
         return self.path / 'lib' / f'python{self.py_version}' / 'site-packages'
 
 
@@ -1000,7 +1006,7 @@ class PetalEnv(ColorMaker):
 
 
     def paths(self, include_core=True):
-        "Site Paths of this env and all base envs."
+        "Site paths of this env and all base envs."
 
         if include_core or not self.is_core:
             ret = [str(self.site_path)]
