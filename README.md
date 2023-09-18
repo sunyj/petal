@@ -10,27 +10,29 @@ The name comes from an anagram of letters `L`, `A` (from layered), `P` (from Pyt
 
 In this project, an "environment" means a [PEP 405](https://peps.python.org/pep-0405/) virtual environment as well as all packages installed in it.
 
-In most cases, "virtual" is omitted as it's the only type of Python environment.  In some cases, we use **env** for short.
+In most cases, "virtual" is omitted for concision.  In some contexts, we use **env** for short.
 
 ### Is petal a replacement to pip?
 
-No.  In fact, all actual package operations, such as `install` and `uninstall`, are delegated to pip.
+No, and probably never.
+
+In fact, all actual package operations, such as `install` and `uninstall`, are delegated to pip.
 
 ### Then what's the point of a pip wrapper?
 
-Petal uses pip, not just wraps it up.  Its distinctive features include:
+Petal is NOT a wrapper of pip, it uses pip for pckage installation and dependency query.  Its distinctive features include:
 
 - It is designed to be an environment-as-code (EaC) solution.
 - It manages environments as layers.
 - It supports environment delivery.
 - It's zero-dependency and zero-config.
   - PEP 405 is built-in since Python 3.3.
-  - pip is bootstrapped from the fastest PyPI mirror automatically.
+  - pip is automatically bootstrapped from the fastest PyPI mirror with latest version.
 
 
 ### `pip freeze` with `requirements.txt` is already an EaC solution, isn't it?
 
-It is, but not quite so. `requirements.txt` is only a **flat list** of installed packages, without any dependency information.  Petal not only knows which packages you ***need***, it also knows, and in fact focuses on, which packages you ***want***.
+It is, but not entirely. While `requirements.txt` provides a list of installed packages, it lacks the necessary dependency information.  It's like a planar projection of a higher dimensional structure, which is insufficient for proper management of that structure.  In contrast, Petal tracks not only ***what*** packages were installed but also ***why*** you have them installed.
 
 # The Problems
 
@@ -40,23 +42,23 @@ Python seems to have everything. We can make an isolated virtual environment wit
 
 ## Regulated package removal
 
-While pip installs all dependents when you install new packages, it does NOT consult dependencies when you remove them. If you tried some package in your project and finally decided to give it up, it could be a pain to clear up its dependencies. Besides, the system may slip into dependency breaks easily.
+While pip installs all dependents when you install new packages, it does NOT consult dependencies when you remove them. If you tried some package in your project and finally decided to give it up, it could be a pain to clear up its dependencies. Besides, the system may easily slip into dependency breaks.
 
 ## Environment as code
 
 Package dependency is usually an indivisible part of a Python project, and it would be nice to save the dependencies to a text file from which a virtual environment can be constructed or restored.  That's the idea of the so-called Environment-as-Code (EaC).
 
-`pip freeze > requirements.txt` and `pip install -r requirements.txt` is admittedly an EaC solution, but it's far from ideal.  Dependency structures get lost in the roundtrip, so there's no way to tell which packages are the ones you want and which are their dependencies you have to install.
+`pip freeze > requirements.txt` and `pip install -r requirements.txt` is admittedly an EaC solution, but it's far from ideal.  Dependency structures get lost in the roundtrip, so there's no way to tell which packages are the ones you ***want*** and which are their dependencies you ***need*** to install.
 
 ## Environment reuse
 
-Suppose you're working on a application that requires some large packages (such as `tensorflow`), and you need some other packages (such as `PyTest`) to make unit tests.  It would be nice if the testing environment can reuse the packages in development environment.
+Suppose you're working on a application that requires some large packages (such as `tensorflow`), while you need some other packages (such as `PyTest`) to make unit tests.  It would be nice if the testing environment can reuse the packages in development environment.
 
 # A Solution
 
-Following UNIX's golden "do one thing and do it well" philosophy, both pip and PEP 405 are great tools with great implementation.  PEP 405 can make a perfectly isolated virtual environment, to which [pip installs packages](https://ianbicking.org/blog/2008/10/pyinstall-is-dead-long-live-pip.html).  An environment without packages is useless; Packages beyond an isolated environment are clueless.  How to make them work together has been a long quest for the community.
+Both PEP 405 and pip are great examples of UNIX's famous "do one thing and do it well" philosophy.  PEP 405 can make a perfectly isolated virtual environment, to which [pip installs packages](https://ianbicking.org/blog/2008/10/pyinstall-is-dead-long-live-pip.html).  Environments without packages are useless; Packages beyond an isolated environment are clueless.  How to make them work together has been a long quest for the community.
 
-Inspired by another UNIX philosophy: "make programs work together", we don't need a replacement for pip; We need a tool that makes good use of this important asset of the Python community and provides developers with a new level of abstraction: environment management.
+Inspired by another UNIX philosophy: "make programs work together," I gradually realized that we don't need a replacement for pip.  Instead, we need a tool that makes good use of these core assets of the Python community to implement a new level of abstraction: environment management.
 
 Petal is ambitious; It aims to be the last missing piece to the puzzle of Python environment management.
 
