@@ -764,12 +764,12 @@ class Package:
 
     def __init__(self, pkg, extras=[]):
         self.disp = pkg.project_name
-        self.name = self.disp.lower()
+        self.name = pkg_name(self.disp)
         self.extras = extras
         self.env = grep(r'^(.+)/lib/python.+/site-packages', pkg.module_path)
         self.native = True
         self.version = pkg.version
-        self.depon = [x.name.lower() for x in pkg.requires(extras=extras)]
+        self.depon = [pkg_name(x.name) for x in pkg.requires(extras=extras)]
         self.depby = set()
     def __str__(self): return self.disp
     def __repr__(self): return f'Package({self.disp})'
@@ -1214,7 +1214,7 @@ def grep(regexp, string, spec=1):
 
 
 def pkg_name(name):
-    return grep(r'^([a-zA-Z0-9_\-]+)', name).lower()
+    return grep(r'^([a-zA-Z0-9_\-]+)', name).lower().replace('-', '_')
 
 
 def download_url(url, filename=None, *, timeout=10):
