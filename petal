@@ -1113,7 +1113,7 @@ class PetalEnv(ColorMaker):
         pip_cmd = self.core.pip('install', '--help')
         for x in check_output(pip_cmd).split('\n'):
             # this regexp filters out all options with argument
-            if re.match('^\s{2,4}-[^ ].+\s+<[^ ]+>', x):
+            if re.match(r'^\s{2,4}-[^ ].+\s+<[^ ]+>', x):
                 spec += [c.strip(',') for c in x.split() if c.startswith('-')]
         spec = sorted(spec)
 
