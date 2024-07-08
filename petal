@@ -1217,7 +1217,7 @@ def grep(regexp, string, spec=1):
 
 
 def pkg_name(name):
-    return grep(r'^([a-zA-Z0-9_\-]+)', name).lower().replace('-', '_')
+    return grep(r'^([a-zA-Z0-9_\-\.]+)', name).lower().replace('-', '_')
 
 
 def download_url(url, filename=None, *, timeout=10):
