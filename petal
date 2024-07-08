@@ -667,8 +667,9 @@ class Petal(ColorMaker):
                 log(f'download pip {self._ver(pip_ver)} from {self._url(pypi)}')
                 py = f'{env}/bin/python'
                 whl = f'{tmp}/{fname}'
+                opts = f'-q --no-index --no-warn-script-location'
                 download_url(pip_url, whl)
-                os_run(f'{py} {whl}/pip install --no-index -q {whl}')
+                os_run(f'{py} {whl}/pip install {opts} {whl}')
         except Exception as e:
             shutil.rmtree(env, ignore_errors=True)
             raise
@@ -1032,8 +1033,12 @@ class PetalEnv(ColorMaker):
         "Return pip command line as a string list."
 
         python = str(self.path / 'bin' / 'python')
-        global_opts = ['--disable-pip-version-check', '--no-input']
-        ret = [python, '-m' , 'pip'] + global_opts + [cmd]
+        opts = [
+            '--disable-pip-version-check',
+            '--no-warn-script-location',
+            '--no-input',
+            ]
+        ret = [python, '-m' , 'pip'] + opts + [cmd]
         if isinstance(args, list):
             ret += args
         else:
