@@ -292,7 +292,7 @@ class Petal(ColorMaker):
             die('no package to install')
 
         # filter out installed packages with version specs removed
-        installed = set(pkg.name for pkg in env.list_installed(deep=False))
+        installed = set(pkg.name for pkg in env.packages)
         new = [p for p in wanted.names if p not in installed]
 
         # handle promotion: package installed but not in the explicit set
@@ -550,10 +550,9 @@ class Petal(ColorMaker):
         lib_empty = not any(True for p in env.site_path.iterdir())
         if not lib_empty:
             # check if it's different from freeze file
-            installed = sorted([f'{p.name}=={p.version}'
-                                for p in env.list_installed()])
+            pkgs = sorted([f'{p.name}=={p.version}' for p in env.packages])
             freezed = sorted(read_lines(freeze))
-            if installed == freezed:
+            if pkgs == freezed:
                 log(f'{self._env(env)} seems up-to-date')
                 return
 
@@ -763,19 +762,24 @@ def scan_layers(root=None):
 class Package:
     "Abstraction of single package."
 
-    def __init__(self, pkg, extras=[]):
-        self.disp = pkg.project_name
+    def __init__(self, p, extras=None):
+        self.disp = p.project_name
         self.name = pkg_name(self.disp)
-        self.extras = extras
-        self.env = grep(r'^(.+)/lib/python.+/site-packages', pkg.module_path)
+        self.extras = [] if not extras else list(extras)
+        self.env = grep(r'^(.+)/lib/python.+/site-packages', p.module_path)
         self.native = True
-        self.version = pkg.version
-        self.depon = [pkg_name(x.name) for x in pkg.requires(extras=extras)]
+        self.version = p.version
+        self.depon = [pkg_name(x.name) for x in p.requires(extras=self.extras)]
         self.depby = set()
+
     def __str__(self): return self.disp
+
     def __repr__(self): return f'Package({self.disp})'
+
     def __hash__(self): return hash(self.name)
+
     def __eq__(self, rhs): return self.name == rhs.name
+
     def __lt__(self, rhs): return self.name < rhs.name
 
 
@@ -783,7 +787,7 @@ class PackageSet:
     "A set of packages with dependency traversing."
 
     def __init__(self, env, deep=True):
-        self.pkgs = {p.name: p for p in env.list_installed(deep=deep)}
+        self.pkgs = {p.name: p for p in env.packages}
         # resolve dependency network
         this_env = str(env.path)
         for name, pkg in self.pkgs.items():
@@ -1054,10 +1058,11 @@ class PetalEnv(ColorMaker):
             sys.path = orig_path
 
 
-    def list_installed(self, deep=True):
+    @property
+    def packages(self):
         # acurate dependencies requires extras, build a lut for it
         extras = defaultdict(set)
-        for p in self.explicits(deep=deep):
+        for p in self.explicits(deep=False):
             mo = re.search(r'\[(.+)\]', p.spec)
             if mo:
                 extras[p.name] = {x.strip() for x in mo.group(1).split(',')}
@@ -1069,11 +1074,8 @@ class PetalEnv(ColorMaker):
             for d in e.iter_installed_distributions():
                 for p in d.iter_dependencies():
                     extras[p.key] |= set(p.extras)
-            pkgs = [Package(d._dist, list(extras.get(d._dist.key, {})))
-                    for d in e.iter_installed_distributions()]
-        if deep:
-            return pkgs
-        return [p for p in pkgs if p.env == str(self.path)]
+                    for d in e.iter_installed_distributions():
+                        yield Package(d._dist, extras.get(d._dist.key, {}))
 
 
     def split_install_args(self, args):
