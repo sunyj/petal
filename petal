@@ -1169,9 +1169,8 @@ class PetalEnv(ColorMaker):
             self.freeze()
 
 
-    def freeze(self, deep=False):
-        pkgs = [f'{p.name}=={p.version}'
-                for p in self.list_installed(deep=deep)]
+    def freeze(self):
+        pkgs = [f'{p.name}=={p.version}' for p in self.packages]
         write_file(self.freeze_file, sorted(pkgs))
 
 
