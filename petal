@@ -1074,8 +1074,11 @@ class PetalEnv(ColorMaker):
             for d in e.iter_installed_distributions():
                 for p in d.iter_dependencies():
                     extras[p.key] |= set(p.extras)
-                    for d in e.iter_installed_distributions():
-                        yield Package(d._dist, extras.get(d._dist.key, {}))
+            local_env = str(self.path)
+            for d in e.iter_installed_distributions():
+                pkg = Package(d._dist, extras.get(d._dist.key, {}))
+                if pkg.env == local_env:
+                    yield pkg
 
 
     def split_install_args(self, args):
