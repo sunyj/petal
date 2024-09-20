@@ -547,13 +547,10 @@ class Petal(ColorMaker):
             return
 
         lib_empty = not any(True for p in env.site_path.iterdir())
-        if not lib_empty:
-            # check if it's different from freeze file
-            pkgs = sorted([f'{p.name}=={p.version}' for p in env.packages])
-            freezed = sorted(read_lines(freeze))
-            if pkgs == freezed:
-                log(f'{self._env(env)} seems up-to-date')
-                return
+        # check if it's different from freeze file
+        if not lib_empty and env.specs == sorted(read_lines(freeze)):
+            log(f'{self._env(env)} seems up-to-date')
+            return
 
         self._run_pip(env.pip('install', ['-r', str(freeze.resolve())]))
 
@@ -1061,6 +1058,10 @@ class PetalEnv(ColorMaker):
                 if pkg.env == local_env:
                     yield pkg
 
+    @property
+    def specs(self):
+        return sorted([f'{p.name}=={p.version}' for p in self.packages])
+
     def split_install_args(self, args):
         "Split args into pip install options and package names."
         ins_spec = self._get_install_spec()
@@ -1147,8 +1148,7 @@ class PetalEnv(ColorMaker):
             self.freeze()
 
     def freeze(self):
-        pkgs = [f'{p.name}=={p.version}' for p in self.packages]
-        write_file(self.freeze_file, sorted(pkgs))
+        write_file(self.freeze_file, self.specs)
 
     def __str__(self):
         return self._y(tilde_path(str(self.path)))
