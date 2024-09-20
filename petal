@@ -749,9 +749,9 @@ def scan_layers(root=None):
 class Package:
     "Abstraction of single package."
 
-    def __init__(self, p, extras=None):
-        self.disp = p.project_name
-        self.name = pkg_name(self.disp)
+    def __init__(self, name, p, extras=None):
+        self.disp = name
+        self.name = pkg_name(p.project_name)
         self.extras = [] if not extras else list(extras)
         self.env = grep(r'^(.+)/lib/python.+/site-packages', p.module_path)
         self.native = True
@@ -1054,13 +1054,13 @@ class PetalEnv(ColorMaker):
                     extras[p.key] |= set(p.extras)
             local_env = str(self.path)
             for d in e.iter_installed_distributions():
-                pkg = Package(d._dist, extras.get(d._dist.key, {}))
+                pkg = Package(d.raw_name, d._dist, extras.get(d._dist.key, {}))
                 if pkg.env == local_env:
                     yield pkg
 
     @property
     def specs(self):
-        return sorted([f'{p.name}=={p.version}' for p in self.packages])
+        return sorted([f'{p.disp}=={p.version}' for p in self.packages])
 
     def split_install_args(self, args):
         "Split args into pip install options and package names."
