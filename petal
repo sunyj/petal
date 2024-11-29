@@ -106,7 +106,7 @@ class Petal(ColorMaker):
     def __init__(self):
         super().__init__()
         self.exit_code = 0
-        self.python = os.path.realpath(sys.executable)
+        self.python = Path(sys.executable)
 
     def run(self):
         "Entry function of petal."
@@ -129,10 +129,9 @@ class Petal(ColorMaker):
         idx = args.index('with') + 1
         if idx >= len(args):
             die_usage()
-        self.python = args[idx]
-        if not os.path.exists(self.python):
+        if not os.path.exists(args[idx]):
             die(f'{self.python} not found!')
-        self.python = os.path.realpath(self.python)
+        self.python = Path(args[idx])
         args[idx] = ''
         args[idx - 1] = ''
         return list(filter(None, args))
@@ -231,6 +230,10 @@ class Petal(ColorMaker):
 
         # find the env we're working on
         env = PetalEnv(args[0]) if len(args) else self.default_env
+
+        if self.python.resolve() != env.python.resolve() and 'PETAL_SHOW' not in os.environ:
+            os.execve(env.python, ['-B'] + sys.argv, {'PETAL_SHOW': '1'})
+            exit(0)
 
         def _pkg_line(p, level, sign='-'):
             prefix = '  ' * level
@@ -459,7 +462,7 @@ class Petal(ColorMaker):
     def env_new(self, path, layers=[], *, is_core=False):
         "Make a new petal environment."
 
-        if not os.path.exists(self.python):
+        if not self.python.exists():
             die(f'{self.python} not found')
         for layer in layers:
             self._ensure_layer(layer)
@@ -627,7 +630,7 @@ class Petal(ColorMaker):
         make_dir(env / self.user_site)
         write_file(
             env / 'pyvenv.cfg',
-            [f'home = {os.path.dirname(self.python)}', f'include-system-site-packages = false'],
+            [f'home = {self.python.parent}', f'include-system-site-packages = false'],
         )
 
     def calc_layer_path(self, env, layer):
@@ -937,6 +940,10 @@ class PetalEnv(ColorMaker):
             layer = layer.expanduser().resolve()
             if layer.is_dir():
                 self.bases.append(layer)
+
+    @property
+    def python(self):
+        return self.path / 'bin' / 'python'
 
     @property
     def conf_file(self):
