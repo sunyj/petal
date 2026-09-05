@@ -1,6 +1,6 @@
 # Layered Python Environments
 
-Petal is a single-script zero-dependency Python environment manager managing [PEP 405](https://peps.python.org/pep-0405/) virtual environments as layers.
+Petal is a sigle-file and dependency-free Python environment manager managing [PEP 405](https://peps.python.org/pep-0405/) virtual environments as layers.
 
 The name comes from an anagram of letters `L`, `A` (from layered), `P` (from Python),  `E`, `T` (from environment).
 
@@ -245,6 +245,6 @@ Petal is sophisticated, not complicated, and I want to deliver that message thro
 
 # Limitations
 
-- Only tested on Linux with Python 3.8.
+- Only tested on x86_64 Linux.
 - Should work on MacOS, but no extensive tests yet.
 - Unlikely to work properly on Windows for now, but should be fairly easy to make it work as petal only uses the standard library.

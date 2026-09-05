@@ -625,9 +625,10 @@ class Petal(ColorMaker):
     def create_pep405(self, env, *, python=None):
         "Make a bare PEP-405 virtual environment."
 
+        py_ver = self.get_py_version(python)
         make_dir(env / 'bin')
         os.symlink(python or self.python, env / 'bin' / 'python')
-        make_dir(env / self.user_site)
+        make_dir(env / f'lib/python{py_ver}/site-packages')
         write_file(
             env / 'pyvenv.cfg',
             [f'home = {self.python.parent}', f'include-system-site-packages = false'],
@@ -725,13 +726,18 @@ def scan_layers(root=None):
 """,
         )
 
+    def get_py_version(self, python=None):
+        return check_output(
+            [
+                python or self.python,
+                '-c',
+                'import sys; v = sys.version_info; print(f"{v[0]}.{v[1]}")',
+            ]
+        )
+
     @property
     def py_version(self):
-        "Version of the env's (NOT this script's) Python."
-
-        return check_output(
-            [self.python, '-c', 'import sys; v = sys.version_info; print(f"{v[0]}.{v[1]}")']
-        )
+        return self.get_py_version()
 
     @property
     def user_site(self):
