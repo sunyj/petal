@@ -50,6 +50,10 @@ def die_usage():
     Environment delivery
        petal deliver <env> [to] <destination>
 
+    Manage relative include path
+       petal include add <path ...> [to env]
+       petal include del <path ...> [from env]
+
     Package install
        petal add <pip install params ...> [to env]
 
@@ -268,6 +272,54 @@ class Petal(ColorMaker):
             log('- (orphans)')
             for p in orphans:
                 log(_pkg_line(p, 1, '?'))
+
+    def cmd_include(self, args):
+        "Add or remove relative include paths."
+
+        if len(args) < 2:
+            die_usage()
+        action = args[0]
+        if action not in ['add', 'del']:
+            die_usage()
+        args = args[1:]
+
+        # find the env we're working on
+        keyword = 'to' if action == 'add' else 'from'
+        if len(args) > 2 and args[-2] == keyword:
+            env = PetalEnv(args[-1])
+            args = args[:-2]
+        else:
+            env = self.default_env
+
+        if env.is_naive or env.is_core:
+            die(f'{self._env(env)} is not a petal env')
+
+        # include paths are relative to the env's parent directory
+        paths = []
+        for x in args:
+            p = Path(x).expanduser()
+            if not p.is_absolute():
+                p = Path.cwd() / p
+            p = Path(os.path.normpath(p))
+            if action == 'add' and not p.is_dir():
+                die(f'include path {self._url(p)} not found')
+            paths.append(os.path.relpath(p, env.path.parent))
+
+        includes = env.includes
+        if action == 'add':
+            includes = includes + [p for p in paths if p not in includes]
+        else:
+            unknown = [p for p in paths if p not in includes]
+            if unknown:
+                die(f'[{env}] unknown includes: {self._url(unknown)}')
+            includes = [p for p in includes if p not in paths]
+
+        if includes == env.includes:
+            log(f'[{env}] nothing to change')
+            return
+
+        env.update_includes(includes)
+        log(f'[{env}] includes: {self._url(includes) or "none"}')
 
     def cmd_add(self, args, dryrun=False):
         "Install pakcages to env."
@@ -489,7 +541,13 @@ class Petal(ColorMaker):
         # write files for petal env
         conf_layers = [] if based_on_core else layers
         dump_json(
-            env / 'petal.json', {'python': self.py_version, 'bases': conf_layers, 'require': []}
+            env / 'petal.json',
+            {
+                'python': self.py_version,
+                'bases': conf_layers,
+                'require': [],
+                'includes': [],
+            },
         )
         write_file(env / 'petal.freeze')
         write_file(env / '.gitignore', ["*", "!.gitignore", "!petal.json", "!petal.freeze"])
@@ -681,48 +739,54 @@ class Petal(ColorMaker):
 
         site = env / 'lib' / f'python{self.py_version}' / 'site-packages'
         write_file(
-            site / 'petal-layers.pth', "import sys; __import__('_petal_layers').scan_layers()"
+            site / 'petal-layers.pth',
+            "import sys;"
+            " '_petal_layers' in sys.modules or"
+            " __import__('_petal_layers').scan_layers()",
         )
         write_file(
             site / '_petal_layers.py',
             """
-############################ petal layered env hack ############################
+################################ petal layered env hack ################################
 import sys, os, json; from pathlib import Path; from contextlib import suppress
-envs = set() # mutual inclusion prevention
+envs = set()
+def add_path(path):
+    p = str(path)
+    if p not in sys.path:
+        sys.path.append(p)
 def scan_layers(root=None):
     global envs
     if root is None:
-        scan_layers(Path(__file__).parent.parent.parent.parent)
+        scan_layers(Path(__file__).resolve().parent.parent.parent.parent)
         envs = set()
         return
-    if root in envs:
+    if str(root) in envs:
         return
     envs.add(str(root))
     with suppress(Exception):
         json_conf = root / 'petal.json'
-        not_core = json_conf.exists()
+        is_core = not json_conf.exists()
         layers = []
         py_version = '.'.join(str(v) for v in sys.version_info[:2])
         libdir = f'python{py_version}'
-        if not_core:
+        if not is_core:
             with open(json_conf) as f:
                 conf = json.load(f)
             if 'python' not in conf or conf['python'] != py_version:
                 return
-            bases = conf['bases'] or [f'~/.cache/petal.py/core/{libdir}']
+            for inc in conf.get('includes', []):
+                add_path(root.parent / inc)
+            bases = conf.get('bases', []) or [f'~/.cache/petal.py/core/{libdir}']
             for d in bases:
                 layer = d[0] in ['/', '~'] and Path(d) or root / d
                 layer = layer.expanduser().resolve()
                 if layer.is_dir():
                     layers.append(layer)
-        if not_core or 'PETAL_USE_CORE' in os.environ:
-            site_path = root / 'lib' / libdir / 'site-packages'
-            if site_path.is_dir():
-                path = str(site_path)
-                if path not in sys.path:
-                    sys.path.append(path)
-        for layer in layers: scan_layers(layer)
-################################################################################
+        elif 'PETAL_USE_CORE' in os.environ:
+            add_path(root / 'lib' / libdir / 'site-packages')
+        for layer in layers:
+            scan_layers(layer)
+########################################################################################
 """,
         )
 
@@ -914,11 +978,13 @@ class PetalEnv(ColorMaker):
         self.is_core = False
         self.is_naive = False
         self.bases = []
+        self.includes = []
         bases = []
         if self.cfg:
             self.py_version = self.cfg['python']
             self.require = Explicits(self.cfg['require'], pwd=self.path.parent)
             bases = self.cfg.get('bases', [])
+            self.includes = self.cfg.get('includes', [])
         else:
             self.require = Explicits(pwd=self.path.parent)
             if (self.path / INSTALL_SPEC_CACHE).exists():
@@ -1152,6 +1218,11 @@ class PetalEnv(ColorMaker):
         dels = set(pkg_name(p) for p in pkg_specs)
         lut = self.require.lut
         self.update_require([lut[p] for p in lut if p not in dels])
+
+    def update_includes(self, includes):
+        self.cfg['includes'] = includes
+        self.includes = includes
+        dump_json(self.conf_file, self.cfg)
 
     def update_require(self, req, freeze=True):
         self.cfg['require'] = req

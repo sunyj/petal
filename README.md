@@ -142,6 +142,7 @@ A petal env is standard PEP 405 virtual env with two crucial hacks:
 - Two metadata files (`petal.json` and `petal.freeze`) to store the env's:
   - Python version (`major.minor`).
   - Base env(s).
+  - Include path(s).
   - Installed packages and their structures.
 
 So, a petal env is also a ***layer***, which contains module paths of base layers recursively.  Layered envs is the core mechanism of petal.  It enables petal to manage an env's packages less intrusively.
@@ -200,6 +201,17 @@ You can prepend `plan` to `add`, `del`, and `upgrade` commands to check what pet
 
 - `-a`, `--all`: show all packages in env, not just explicits.
 - `-v`, `--version`: show packages' versions.
+
+## Include Path
+
+Packages are not the only thing worth sharing between environments;  your own source directories are just as likely to be used by several envs of a project.  The `include` command keeps such directories in the env's `petal.json` and puts them on `sys.path`, so no `PYTHONPATH` juggling is needed:
+
+```bash
+petal include add src lib to env
+petal include del src from env
+```
+
+Paths are saved relative to the env's parent directory, which makes them portable along with the rest of `petal.json`, and works the same for base layers:  an env sees the include paths of all its base envs recursively, just like their packages.
 
 ## Env Delivery
 
