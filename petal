@@ -247,31 +247,68 @@ class Petal(ColorMaker):
             return f'{prefix}{sign} {name}'
 
         explicits = env.explicits(deep=True)
-        if not explicits:
+        includes = self._collect_includes(env)
+        if not explicits and not includes:
             die('empty env')
 
-        pkgs = PackageSet(env)
-        log(f'packages in {self._env(env)}:')
-        for xpkg in explicits:
-            name = xpkg.name
-            pkg = pkgs[name]
-            line = f'- {self._pkg(xpkg.spec)}'
-            if show_version:
-                line += f' {self._ver(pkg.version)}'
-            if not pkg.native:
-                relpath = os.path.relpath(pkg.env, env.path)
+        if explicits:
+            pkgs = PackageSet(env)
+            log(f'packages in {self._env(env)}:')
+            for xpkg in explicits:
+                name = xpkg.name
+                pkg = pkgs[name]
+                line = f'- {self._pkg(xpkg.spec)}'
+                if show_version:
+                    line += f' {self._ver(pkg.version)}'
+                if not pkg.native:
+                    relpath = os.path.relpath(pkg.env, env.path)
+                    line += f' from {self._env(relpath)}'
+                log(line)
+                if show_all:
+                    for p, level in pkgs.walk(name):
+                        log(_pkg_line(p, level))
+
+            explicit_names = set(p.name for p in explicits)
+            orphans = [p for p in pkgs.orphans() if p.native and p.name not in explicit_names]
+            if orphans:
+                log('- (orphans)')
+                for p in orphans:
+                    log(_pkg_line(p, 1, '?'))
+
+        self._show_includes(env, includes)
+
+    def _collect_includes(self, env):
+        "Return (layer, include, full path) of env and its base layers, deduplicated."
+
+        ret, seen_envs, seen_paths = [], set(), set()
+        for layer in env.walk():
+            key = layer.path.resolve()
+            if key in seen_envs:
+                continue
+            seen_envs.add(key)
+            for inc in layer.includes:
+                full = Path(os.path.normpath(layer.path.parent / inc))
+                if full in seen_paths:
+                    continue
+                seen_paths.add(full)
+                ret.append((layer, inc, full))
+        return ret
+
+    def _show_includes(self, env, includes):
+        "Print include paths with their source layers."
+
+        if not includes:
+            return
+        log(f'includes in {self._env(env)}:')
+        for layer, inc, full in includes:
+            if full.is_dir():
+                line = f'- {self._b(inc)}'
+            else:
+                line = f'- {self._r(inc)} {self._r("(missing)")}'
+            if layer.path.resolve() != env.path.resolve():
+                relpath = os.path.relpath(layer.path, env.path)
                 line += f' from {self._env(relpath)}'
             log(line)
-            if show_all:
-                for p, level in pkgs.walk(name):
-                    log(_pkg_line(p, level))
-
-        explicit_names = set(p.name for p in explicits)
-        orphans = [p for p in pkgs.orphans() if p.native and p.name not in explicit_names]
-        if orphans:
-            log('- (orphans)')
-            for p in orphans:
-                log(_pkg_line(p, 1, '?'))
 
     def cmd_include(self, args):
         "Add or remove relative include paths."

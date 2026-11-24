@@ -197,7 +197,7 @@ You can prepend `plan` to `add`, `del`, and `upgrade` commands to check what pet
 
 ## Env Inspection
 
-`petal show [env]` prints the aforementioned structure of the env.  By default, only explicit and native packages are listed.  `petal show` command supports these options:
+`petal show [env]` prints the aforementioned structure of the env.  Include paths of the env and its base envs are listed after packages (the source layer is noted for inherited ones, and missing directories are highlighted in red).  By default, only explicit and native packages are listed.  `petal show` command supports these options:
 
 - `-a`, `--all`: show all packages in env, not just explicits.
 - `-v`, `--version`: show packages' versions.
