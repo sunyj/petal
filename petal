@@ -134,7 +134,7 @@ class Petal(ColorMaker):
         if idx >= len(args):
             die_usage()
         if not os.path.exists(args[idx]):
-            die(f'{self.python} not found!')
+            die(f'{tilde_path(args[idx])} not found!')
         self.python = Path(args[idx])
         args[idx] = ''
         args[idx - 1] = ''
@@ -209,10 +209,10 @@ class Petal(ColorMaker):
         dst = Path(dst_path)
         if dst.exists():
             if not dst.is_dir():
-                die(f'{dst} found but not a directory')
+                die(f'{tilde_path(dst)} found but not a directory')
             dst = dst / src.path.name
             if dst.exists():
-                die(f'{dst} already exists')
+                die(f'{tilde_path(dst)} already exists')
 
         # create an empty env
         self._ensure_core()
@@ -552,7 +552,7 @@ class Petal(ColorMaker):
         "Make a new petal environment."
 
         if not self.python.exists():
-            die(f'{self.python} not found')
+            die(f'{tilde_path(self.python)} not found')
         for layer in layers:
             self._ensure_layer(layer)
 
@@ -602,18 +602,18 @@ class Petal(ColorMaker):
 
         env = Path(path)
         if not env.is_dir():
-            die(f'{path} is not a directory')
+            die(f'{tilde_path(path)} is not a directory')
 
         # check Python version
         with open(env / 'petal.json') as f:
             cfg = json.load(f)
         env_py = cfg['python']
         if env_py != self.py_version:
-            die(f'{path} uses Python {env_py}')
+            die(f'{tilde_path(path)} uses Python {env_py}')
 
         freeze = env / 'petal.freeze'
         if not freeze.exists():
-            die(f'{str(freeze)} not found!')
+            die(f'{tilde_path(freeze)} not found!')
 
         if not cfg.get('bases', []):
             self._ensure_core()
@@ -628,7 +628,7 @@ class Petal(ColorMaker):
         self.create_pep405(env)
         self.install_layers_hack(env)
         act = restore and 'rebuilt' or 'made'
-        log(f'environment {self._env(env)} {act} with {self._c(self.python)}')
+        log(f'environment {self._env(env)} {act} with {self._c(tilde_path(self.python))}')
 
     def env_restore(self, path, *, restore=False):
         "Restore packages in a petal environment."
@@ -636,12 +636,12 @@ class Petal(ColorMaker):
         env = isinstance(path, PetalEnv) and path or PetalEnv(path)
         freeze = env.path / 'petal.freeze'
         if not freeze.exists():
-            die(f'{freeze} not found!')
+            die(f'{tilde_path(freeze)} not found!')
 
         freeze_empty = os.stat(freeze).st_size == 0
         if freeze_empty:
             if not restore:
-                log(f'{freeze} seems empty')
+                log(f'{tilde_path(freeze)} seems empty')
             return
 
         lib_empty = not any(True for p in env.site_path.iterdir())
@@ -674,7 +674,7 @@ class Petal(ColorMaker):
 
     def _ensure_layer(self, layer):
         if not os.path.exists(layer):
-            die(f'layer {layer} not found')
+            die(f'layer {tilde_path(layer)} not found')
         env = PetalEnv(layer)
         if env.py_version != self.py_version:
             path = tilde_path(os.path.realpath(layer))
@@ -1037,7 +1037,7 @@ class PetalEnv(ColorMaker):
                     ]
                 )
         if not self.py_version:
-            die(f'Python version not found in {self.path}')
+            die(f'Python version not found in {tilde_path(self.path)}')
 
         if self.is_core or self.is_naive:
             return
@@ -1209,7 +1209,7 @@ class PetalEnv(ColorMaker):
             cache = json.load(f)
         pip_ver = self._get_pip_version()
         if not pip_ver:
-            die(f'failed to get pip version in core env {self.core.path}')
+            die(f'failed to get pip version in core env {tilde_path(self.core.path)}')
         if pip_ver in cache:
             return cache[pip_ver]
 
@@ -1231,7 +1231,7 @@ class PetalEnv(ColorMaker):
         "Look up pip version in core env."
 
         if self.core is None:
-            die(f'core env not found for {self.path}')
+            die(f'core env not found for {tilde_path(self.path)}')
         for d in self.core.site_path.iterdir():
             if d.is_dir():
                 version = grep(r'^pip-(.+)\.dist-info$', d.name)
@@ -1293,7 +1293,7 @@ def make_dir(path):
     try:
         os.makedirs(path)
     except Exception as e:
-        die(f'failed to make env dierctory: {str(e)}')
+        die(f'failed to make env directory {tilde_path(path)}: {e.strerror or e}')
 
 
 def check_output(cmd):
@@ -1383,9 +1383,19 @@ def os_run(cmd, **env):
 
 
 def tilde_path(path):
-    home = str(Path('~').expanduser())
+    "Pretty print path: replace leading home dir (or its real path) with '~'."
+
     p = str(path)
-    return re.sub('^' + home, '~', p) if p.startswith(home) else p
+    home = os.path.expanduser('~')
+    for h in dict.fromkeys([home, os.path.realpath(home)]):
+        h = h.rstrip('/')
+        if not h:
+            continue
+        if p == h:
+            return '~'
+        if p.startswith(h + '/'):
+            return '~' + p[len(h) :]
+    return p
 
 
 async def aio_tcp_ping(host, port, timeout):
